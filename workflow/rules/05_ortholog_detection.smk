@@ -96,6 +96,36 @@ rule gtf_to_gene_bed:
         """
 
 
+rule compute_insertion_fingerprints:
+    """
+    Compute codon-level insertion fingerprints for introner loci.
+
+    For each introner with a gene and splice site annotation, maps the
+    insertion site to a (gene_id, codon_number, codon_offset) fingerprint
+    using the splice site position and GTF CDS exon structure.
+
+    Used downstream by classify_sharing_status to distinguish ancestral
+    shared introners from independent insertions at the same locus.
+    """
+    input:
+        bed = BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
+        gtf = ANNOTATIONS_DIR / "{sample}.gtf",
+        genome = ASSEMBLIES_DIR / "{sample}.vg_paths.fa",
+        genome_index = ASSEMBLIES_DIR / "{sample}.vg_paths.fa.fai"
+    output:
+        fingerprints = GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv"
+    shell:
+        """
+        mkdir -p {GENOTYPING_DIR}/insertion_fingerprints
+        python {PROJECT_ROOT}/scripts/genotyping/compute_insertion_fingerprints.py \
+            --bed {input.bed} \
+            --gtf {input.gtf} \
+            --genome {input.genome} \
+            --sample {wildcards.sample} \
+            --output {output.fingerprints}
+        """
+
+
 # ============================================================
 # PHASE 1A: Synteny-Based Context Mapping
 # ============================================================
@@ -415,6 +445,41 @@ rule fix_orientations:
         """
 
 
+rule classify_sharing_status:
+    """
+    Classify sharing status for introner ortholog groups.
+
+    Compares codon-level insertion fingerprints within each ortholog group
+    to distinguish ancestrally shared introners from independent insertions
+    at the same genomic locus. Adds a 'sharing_status' column:
+      - ancestral:            same codon position + same family across groups
+      - independent:          different codon position or different family
+      - ambiguous:            small positional difference, same family
+      - same_site_diff_family: exact same position but different families
+      - consistent:           within-group only, fingerprints agree
+      - uncertain:            insufficient fingerprint data
+    """
+    input:
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.oriented.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES)
+    output:
+        verified_matrix = GENOTYPING_DIR / "genotype_matrix.verified.tsv",
+        summary = GENOTYPING_DIR / "insertion_fingerprints" / "sharing_summary.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/classify_sharing_status.py \
+            --matrix {input.genotype_matrix} \
+            --fingerprints {input.fingerprints} \
+            --output {output.verified_matrix} \
+            --summary {output.summary} \
+            --codon-tolerance {params.codon_tolerance}
+        """
+
+
 rule annotate_missing_data:
     """
     Annotate missing gene and family data in the genotype matrix.
@@ -429,7 +494,7 @@ rule annotate_missing_data:
     Output: Fully annotated genotype matrix ready for downstream analysis
     """
     input:
-        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.oriented.tsv",
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.verified.tsv",
         gene_beds = [PROCESSED_ANN_DIR / f"{sample}.gene.bed" for sample in ALL_SAMPLES],
         fasta_files = [BLAST_DIR / f"{sample}.candidate_loci.filtered.fa" for sample in ALL_SAMPLES]
     output:
