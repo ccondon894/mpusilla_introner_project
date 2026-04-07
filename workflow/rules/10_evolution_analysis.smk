@@ -1,0 +1,612 @@
+# ============================================================
+# 10_evolution_analysis.smk - Evolution & Diversity Analysis
+# ============================================================
+#
+# Analyzes evolutionary patterns around introner insertion sites
+# by examining flanking sequence diversity.
+#
+# Contains two analysis modes:
+# 1. All-Samples Analysis: Compares fixation patterns between Group1/Group2
+# 2. Group1 Analysis: Frequency-based polymorphism analysis within Group1
+#
+# Steps:
+# - Build consensus sequences from read alignments
+# - Classify orthologs by presence/absence patterns
+# - Align flanking regions with MAFFT
+# - Calculate nucleotide diversity (π) and between-group divergence (dxy)
+# - Generate visualization plots
+#
+# Adapted from:
+# - /scratch1/chris/introner-genotyping-pipeline/rules/all_samples_evolution_analysis.smk
+# - /scratch1/chris/introner-genotyping-pipeline/rules/group1_evolution_analysis.smk
+#
+# ============================================================
+
+import os
+import glob
+import json
+from pathlib import Path
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+# Output directories
+EVOLUTION_DIR = RESULTS / "evolution"
+CONSENSUS_DIR = EVOLUTION_DIR / "consensus_sequences"
+ALIGNMENT_DIR = EVOLUTION_DIR / "alignments"
+DIVERSITY_DIR = EVOLUTION_DIR / "diversity_metrics"
+EVOLUTION_PLOTS_DIR = EVOLUTION_DIR / "plots"
+EVOLUTION_LOG_DIR = EVOLUTION_DIR / "logs"
+
+# Input directories from previous steps
+COVERAGE_BAM_DIR = GENOTYPING_DIR / "coverage" / "bams"
+
+# Flanking sequence lengths to analyze
+FLANK_LENGTHS = config["params"]["flanks"].get("analysis_lengths", [100, 200])
+SIDES = ["left", "right"]
+
+# Fixation categories for all-samples analysis
+FIXATION_CATEGORIES = ["group1_fixed_group2_absent", "group1_absent_group2_fixed", "group1_fixed_group2_fixed"]
+
+# Frequency categories for Group1 analysis (1-10 out of 11 samples)
+FREQUENCY_CATEGORIES = list(range(1, 11))
+
+# Wildcard constraints
+wildcard_constraints:
+    flank_length = "|".join(map(str, FLANK_LENGTHS)),
+    category = "|".join(FIXATION_CATEGORIES),
+    freq = "|".join(map(str, FREQUENCY_CATEGORIES)),
+    side = "left|right",
+    group = "group1|group2",
+    state = "present|absent"
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def get_all_samples_alignment_files(wildcards):
+    """Get all alignment files for all-samples analysis"""
+    classification_file = ALIGNMENT_DIR / f"all_samples_classification_{wildcards.flank_length}bp.json"
+    if exists(classification_file):
+        with open(classification_file, "r") as f:
+            classification = json.load(f)
+
+        alignment_files = []
+        for oid, info in classification.items():
+            category = info["category"]
+            for side in SIDES:
+                alignment_files.extend([
+                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.group1.{side}_flank_{wildcards.flank_length}bp.mafft.fa",
+                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.group2.{side}_flank_{wildcards.flank_length}bp.mafft.fa",
+                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.combined.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
+                ])
+        return alignment_files
+
+    # Defer evaluation until checkpoint completes - this prevents file I/O during DAG construction
+    else:
+        checkpoints.classify_all_samples_orthologs.get()
+
+        classification_file = ALIGNMENT_DIR / f"all_samples_classification_{wildcards.flank_length}bp.json"
+
+        if not classification_file.exists():
+            return []
+
+        with open(classification_file, "r") as f:
+            classification = json.load(f)
+
+        alignment_files = []
+        for oid, info in classification.items():
+            category = info["category"]
+            for side in SIDES:
+                alignment_files.extend([
+                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.group1.{side}_flank_{wildcards.flank_length}bp.mafft.fa",
+                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.group2.{side}_flank_{wildcards.flank_length}bp.mafft.fa",
+                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.combined.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
+                ])
+        return alignment_files
+
+
+def get_group1_alignment_files(wildcards):
+    """Get all alignment files for Group1 analysis"""
+    classification_file = ALIGNMENT_DIR / f"group1_classification_{wildcards.flank_length}bp.json"
+
+    if exists(classification_file):
+        with open(classification_file, "r") as f:
+            classification = json.load(f)
+
+        alignment_files = []
+        for oid, info in classification.items():
+            freq = info["frequency"]
+            present_count = info["present_count"]
+            absent_count = info["absent_count"]
+
+            for side in SIDES:
+                if present_count > 0:
+                    alignment_files.append(
+                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.present.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
+                    )
+                if absent_count > 0:
+                    alignment_files.append(
+                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.absent.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
+                    )
+                if present_count > 0 and absent_count > 0:
+                    alignment_files.append(
+                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.combined.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
+                    )
+        return alignment_files
+
+    # Defer evaluation until checkpoint completes - this prevents file I/O during DAG construction
+    else:
+        checkpoints.classify_group1_orthologs.get()
+
+        classification_file = ALIGNMENT_DIR / f"group1_classification_{wildcards.flank_length}bp.json"
+
+        if not classification_file.exists():
+            return []
+
+        with open(classification_file, "r") as f:
+            classification = json.load(f)
+
+        alignment_files = []
+        for oid, info in classification.items():
+            freq = info["frequency"]
+            present_count = info["present_count"]
+            absent_count = info["absent_count"]
+
+            for side in SIDES:
+                if present_count > 0:
+                    alignment_files.append(
+                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.present.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
+                    )
+                if absent_count > 0:
+                    alignment_files.append(
+                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.absent.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
+                    )
+                if present_count > 0 and absent_count > 0:
+                    alignment_files.append(
+                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.combined.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
+                    )
+        return alignment_files
+
+
+# ============================================================
+# CONSENSUS SEQUENCE BUILDING
+# ============================================================
+
+rule make_evolution_bed_files:
+    """
+    Create BED files for flanking regions around introner loci.
+
+    Extracts coordinates for left and right flanking regions at
+    specified lengths (100bp, 200bp) for each sample.
+    """
+    input:
+        matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+    output:
+        left_bed = CONSENSUS_DIR / "{sample}.loci.left_flank_{flank_length}bp.bed",
+        right_bed = CONSENSUS_DIR / "{sample}.loci.right_flank_{flank_length}bp.bed"
+    shell:
+        """
+        mkdir -p {CONSENSUS_DIR}
+        python {PROJECT_ROOT}/scripts/evolution/make_all_samples_loci_flank_beds.py \
+            {input.matrix} {wildcards.sample} {wildcards.flank_length} \
+            {output.left_bed} {output.right_bed}
+        """
+
+
+rule evolution_mpileup:
+    """
+    Generate mpileup for flanking regions to build consensus.
+
+    Uses bcftools mpileup with quality filters:
+    -d 100: max depth
+    -q 30: min mapping quality
+    -Q 20: min base quality
+    """
+    input:
+        bam = COVERAGE_BAM_DIR / "{sample}.sorted.bam",
+        bed = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.bed",
+        fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
+    output:
+        mpileup = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.mpileup.bcf"
+    params:
+        temp_dir = lambda wildcards: f"temp_{wildcards.sample}_{wildcards.side}_{wildcards.flank_length}bp_sort"
+    shell:
+        """
+        mkdir -p {params.temp_dir}
+
+        bcftools mpileup \
+            -d 100 -q 30 -Q 20 -A \
+            -f {input.fa} -R {input.bed} \
+            -Ou {input.bam} | \
+        bcftools sort -T {params.temp_dir} -Ob -o {output.mpileup}
+
+        rm -rf {params.temp_dir}
+        """
+
+
+rule evolution_call_variants:
+    """
+    Call variants from mpileup for consensus building.
+
+    Uses haploid mode (--ploidy 1) and filters for depth >= 10.
+    """
+    input:
+        mpileup = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.mpileup.bcf",
+        fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
+    output:
+        vcf = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.vcf.gz",
+        filt_vcf = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.filtered.vcf.gz"
+    shell:
+        """
+        bcftools call -m --ploidy 1 -Ou {input.mpileup} | \
+        bcftools norm -f {input.fa} -m +both -Oz -o {output.vcf}
+
+        bcftools filter -i 'DP>=10' {output.vcf} -o {output.filt_vcf}
+        tabix -p vcf {output.filt_vcf}
+        """
+
+
+rule build_sample_consensus:
+    """
+    Build consensus sequences for flanking regions.
+
+    Applies variants from filtered VCF to reference to create
+    sample-specific consensus sequences for each locus.
+    """
+    input:
+        filt_vcf = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.filtered.vcf.gz",
+        bed = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.bed",
+        fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
+    output:
+        cons = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.consensus.fa"
+    params:
+        cons_genome = lambda wildcards: str(CONSENSUS_DIR / f"{wildcards.sample}.{wildcards.side}_{wildcards.flank_length}bp.consensus.fa"),
+        loci = lambda wildcards: str(CONSENSUS_DIR / f"{wildcards.sample}.loci.{wildcards.side}_flank_{wildcards.flank_length}bp.txt")
+    shell:
+        """
+        bcftools consensus -a N -f {input.fa} -o {params.cons_genome} {input.filt_vcf}
+        samtools faidx {params.cons_genome}
+        awk '{{print $1":"$2"-"$3}}' {input.bed} > {params.loci}
+        samtools faidx {params.cons_genome} $(cat {params.loci}) > {output.cons}
+        rm -f {params.cons_genome} {params.cons_genome}.fai {params.loci}
+        """
+
+
+rule build_ref_consensus:
+    """
+    Extract reference consensus sequences (no variant calling needed).
+    """
+    input:
+        bed = CONSENSUS_DIR / f"{REFERENCE}.loci.{{side}}_flank_{{flank_length}}bp.bed",
+        fa = ASSEMBLIES_DIR / f"{REFERENCE}.vg_paths.fa"
+    output:
+        fa = CONSENSUS_DIR / f"{REFERENCE}.loci.{{side}}_flank_{{flank_length}}bp.consensus.fa"
+    shell:
+        """
+        bedtools getfasta -fi {input.fa} -bed {input.bed} -fo {output.fa} -name
+        sed -i 's/ortholog_id_[0-9]\\{{4\\}}:://g' {output.fa}
+        """
+
+
+
+
+
+# ============================================================
+# ALL-SAMPLES ANALYSIS (Group1 vs Group2 Fixation Patterns)
+# ============================================================
+
+checkpoint classify_all_samples_orthologs:
+    """
+    Classify orthologs by fixation status between Group1 and Group2.
+
+    Categories:
+    - group1_fixed_group2_absent: Fixed in Group1, absent in Group2
+    - group1_absent_group2_fixed: Absent in Group1, fixed in Group2
+    - group1_fixed_group2_fixed: Fixed in both groups
+
+    Creates FASTA files for each ortholog grouped by category.
+    """
+    input:
+        fastas = expand(
+            CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.consensus.fa",
+            sample=ALL_SAMPLES, side=SIDES, flank_length=FLANK_LENGTHS
+        ),
+        gt_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+    output:
+        alignment_dir_100bp = directory(ALIGNMENT_DIR / "100bp"),
+        alignment_dir_200bp = directory(ALIGNMENT_DIR / "200bp"),
+        classification_100bp = ALIGNMENT_DIR / "all_samples_classification_100bp.json",
+        classification_200bp = ALIGNMENT_DIR / "all_samples_classification_200bp.json"
+    params:
+        consensus_dir = CONSENSUS_DIR,
+        alignment_dir = ALIGNMENT_DIR,
+        group1_str = ",".join(GROUP1_SAMPLES),
+        group2_str = ",".join(GROUP2_SAMPLES)
+    shell:
+        """
+        mkdir -p {output.alignment_dir_100bp}
+        mkdir -p {output.alignment_dir_200bp}
+
+        python {PROJECT_ROOT}/scripts/evolution/classify_all_samples_orthologs.py \
+            {input.gt_matrix} {params.consensus_dir} {params.alignment_dir} \
+            --group1 {params.group1_str} \
+            --group2 {params.group2_str}
+        """
+
+
+rule align_all_samples_groups:
+    """
+    Align flanking sequences within each group using MAFFT.
+    """
+    input:
+        fasta = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.{group}.{side}_flank_{flank_length}bp.fa"
+    output:
+        aligned = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.{group}.{side}_flank_{flank_length}bp.mafft.fa"
+    wildcard_constraints:
+        group = "group1|group2"
+    shell:
+        """
+        mafft --adjustdirection --maxiterate 1000 --globalpair --quiet {input.fasta} > {output.aligned}
+        """
+
+
+rule align_all_samples_combined:
+    """
+    Create combined alignments for between-group divergence (dxy) calculation.
+    """
+    input:
+        group1 = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.group1.{side}_flank_{flank_length}bp.fa",
+        group2 = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.group2.{side}_flank_{flank_length}bp.fa"
+    output:
+        combined = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.combined.{side}_flank_{flank_length}bp.fa",
+        aligned = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.combined.{side}_flank_{flank_length}bp.mafft.fa"
+    shell:
+        """
+        cat {input.group1} {input.group2} > {output.combined}
+        mafft --adjustdirection --maxiterate 1000 --globalpair --quiet {output.combined} > {output.aligned}
+        """
+
+
+rule calculate_all_samples_diversity:
+    """
+    Calculate diversity metrics (π, dxy) for all-samples analysis.
+
+    Computes:
+    - Within-group nucleotide diversity (π) for Group1 and Group2
+    - Between-group divergence (dxy)
+    """
+    input:
+        alignment_files = get_all_samples_alignment_files
+    output:
+        metrics = DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv"
+    params:
+        alignment_dir = ALIGNMENT_DIR,
+        classification = lambda wildcards: str(ALIGNMENT_DIR / f"all_samples_classification_{wildcards.flank_length}bp.json")
+    shell:
+        """
+        mkdir -p {DIVERSITY_DIR}
+        python {PROJECT_ROOT}/scripts/evolution/calculate_all_samples_diversity_metrics_ros.py \
+            --alignment_dir {params.alignment_dir} \
+            --classification {params.classification} \
+            --flank_length {wildcards.flank_length} \
+            --output {output.metrics}
+        """
+
+
+rule plot_all_samples_analysis:
+    """
+    Generate Dxy boxplot panels for all-samples diversity analysis.
+
+    Panel A: Flanking Dxy across fixation categories (including shared/fixed)
+    Panel B: Introner body Dxy for shared loci (split by family concordance)
+    """
+    input:
+        metrics = DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
+        shared_dxy = EVOLUTION_DIR / "shared_introner_divergence" / "metrics" / "introner_vs_flank_dxy_all_shared.tsv"
+    output:
+        box_plot = EVOLUTION_PLOTS_DIR / "all_samples_box_plots_{flank_length}bp.png"
+    shell:
+        """
+        mkdir -p {EVOLUTION_PLOTS_DIR}
+        python {PROJECT_ROOT}/scripts/evolution/plot_all_samples_analysis_boxplot.py \
+            --input {input.metrics} \
+            --shared-dxy {input.shared_dxy} \
+            --output {output.box_plot} \
+            --flank_length {wildcards.flank_length}
+        """
+
+
+# ============================================================
+# GROUP1 ANALYSIS (Frequency-Based Polymorphism)
+# ============================================================
+
+checkpoint classify_group1_orthologs:
+    """
+    Classify Group1 orthologs by frequency (1-10 out of 11 samples).
+
+    For polymorphic introners within Group1, creates FASTA files
+    separating samples where introner is present vs absent.
+    """
+    input:
+        fastas = expand(
+            CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.consensus.fa",
+            sample=GROUP1_SAMPLES, side=SIDES, flank_length=FLANK_LENGTHS
+        ),
+        gt_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+    output:
+        alignment_dir_100bp = directory(ALIGNMENT_DIR / "group1_100bp"),
+        alignment_dir_200bp = directory(ALIGNMENT_DIR / "group1_200bp"),
+        classification_100bp = ALIGNMENT_DIR / "group1_classification_100bp.json",
+        classification_200bp = ALIGNMENT_DIR / "group1_classification_200bp.json"
+    params:
+        consensus_dir = CONSENSUS_DIR,
+        alignment_dir = ALIGNMENT_DIR,
+        group1_str = ",".join(GROUP1_SAMPLES)
+    shell:
+        """
+        mkdir -p {output.alignment_dir_100bp}
+        mkdir -p {output.alignment_dir_200bp}
+
+        python {PROJECT_ROOT}/scripts/evolution/classify_group1_orthologs.py \
+            {input.gt_matrix} {params.consensus_dir} {params.alignment_dir} \
+            --group1 {params.group1_str}
+        """
+
+
+rule align_group1_frequency_groups:
+    """
+    Align flanking sequences for present/absent sample sets.
+    """
+    input:
+        fasta = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.{state}.{side}_flank_{flank_length}bp.fa"
+    output:
+        aligned = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.{state}.{side}_flank_{flank_length}bp.mafft.fa"
+    wildcard_constraints:
+        state = "present|absent"
+    shell:
+        """
+        mafft --adjustdirection --maxiterate 1000 --globalpair --quiet {input.fasta} > {output.aligned}
+        """
+
+
+rule align_group1_combined:
+    """
+    Create combined alignments for present vs absent comparison.
+    """
+    input:
+        present = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.present.{side}_flank_{flank_length}bp.fa",
+        absent = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.absent.{side}_flank_{flank_length}bp.fa"
+    output:
+        combined = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.combined.{side}_flank_{flank_length}bp.fa",
+        aligned = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.combined.{side}_flank_{flank_length}bp.mafft.fa"
+    shell:
+        """
+        cat {input.present} {input.absent} > {output.combined}
+        mafft --adjustdirection --maxiterate 1000 --globalpair --quiet {output.combined} > {output.aligned}
+        """
+
+
+rule calculate_group1_diversity:
+    """
+    Calculate diversity metrics for Group1 frequency analysis.
+
+    Computes π separately for present vs absent sample sets
+    at each frequency category.
+    """
+    input:
+        alignment_files = get_group1_alignment_files
+    output:
+        metrics = DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv"
+    params:
+        alignment_dir = ALIGNMENT_DIR,
+        classification = lambda wildcards: str(ALIGNMENT_DIR / f"group1_classification_{wildcards.flank_length}bp.json")
+    shell:
+        """
+        mkdir -p {DIVERSITY_DIR}
+        python {PROJECT_ROOT}/scripts/evolution/calculate_group1_diversity_metrics_ros.py \
+            --alignment_dir {params.alignment_dir} \
+            --classification {params.classification} \
+            --flank_length {wildcards.flank_length} \
+            --output {output.metrics}
+        """
+
+
+rule plot_group1_frequency_lines:
+    """
+    Generate frequency-based line plots for Group1 analysis.
+    """
+    input:
+        metrics = DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv"
+    output:
+        present_plot = EVOLUTION_PLOTS_DIR / "frequency_line_plots_{flank_length}bp_present_spectrum.png",
+        absent_plot = EVOLUTION_PLOTS_DIR / "frequency_line_plots_{flank_length}bp_absent_spectrum.png"
+    shell:
+        """
+        mkdir -p {EVOLUTION_PLOTS_DIR}
+        python {PROJECT_ROOT}/scripts/evolution/plot_group1_frequency_analysis.py \
+            --input {input.metrics} \
+            --output {EVOLUTION_PLOTS_DIR} \
+            --plot_type frequency_lines \
+            --flank_length {wildcards.flank_length}
+        """
+
+
+rule plot_group1_box_plots:
+    """
+    Generate box plots for Group1 frequency analysis.
+    """
+    input:
+        metrics = DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv"
+    output:
+        present_box = EVOLUTION_PLOTS_DIR / "frequency_box_plots_{flank_length}bp_present_spectrum.png",
+        absent_box = EVOLUTION_PLOTS_DIR / "frequency_box_plots_{flank_length}bp_absent_spectrum.png"
+    shell:
+        """
+        mkdir -p {EVOLUTION_PLOTS_DIR}
+        python {PROJECT_ROOT}/scripts/evolution/plot_group1_frequency_analysis.py \
+            --input {input.metrics} \
+            --output {EVOLUTION_PLOTS_DIR} \
+            --plot_type box_plot \
+            --flank_length {wildcards.flank_length}
+        """
+
+
+# ============================================================
+# TARGET RULES
+# ============================================================
+
+rule all_evolution_analysis:
+    """
+    Target: Complete evolution analysis (both all-samples and Group1)
+    """
+    input:
+        # All-samples analysis outputs
+        expand(DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
+               flank_length=FLANK_LENGTHS),
+        expand(EVOLUTION_PLOTS_DIR / "all_samples_box_plots_{flank_length}bp.png",
+               flank_length=FLANK_LENGTHS),
+        # Group1 analysis outputs
+        expand(DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv",
+               flank_length=FLANK_LENGTHS),
+        expand(EVOLUTION_PLOTS_DIR / "frequency_line_plots_{flank_length}bp_present_spectrum.png",
+               flank_length=FLANK_LENGTHS),
+        expand(EVOLUTION_PLOTS_DIR / "frequency_box_plots_{flank_length}bp_present_spectrum.png",
+               flank_length=FLANK_LENGTHS)
+
+
+rule all_samples_evolution_only:
+    """
+    Target: All-samples fixation analysis only
+    """
+    input:
+        expand(DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
+               flank_length=FLANK_LENGTHS),
+        expand(EVOLUTION_PLOTS_DIR / "all_samples_box_plots_{flank_length}bp.png",
+               flank_length=FLANK_LENGTHS)
+
+
+rule group1_evolution_only:
+    """
+    Target: Group1 frequency analysis only
+    """
+    input:
+        expand(DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv",
+               flank_length=FLANK_LENGTHS),
+        expand(EVOLUTION_PLOTS_DIR / "frequency_line_plots_{flank_length}bp_present_spectrum.png",
+               flank_length=FLANK_LENGTHS),
+        expand(EVOLUTION_PLOTS_DIR / "frequency_box_plots_{flank_length}bp_present_spectrum.png",
+               flank_length=FLANK_LENGTHS)
+
+
+rule consensus_sequences_only:
+    """
+    Target: Build consensus sequences only (dependency for evolution analysis)
+    """
+    input:
+        expand(
+            CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.consensus.fa",
+            sample=ALL_SAMPLES, side=SIDES, flank_length=FLANK_LENGTHS
+        )

@@ -1,0 +1,247 @@
+# ============================================================
+# Micromonas pusilla Introner Project - Master Configuration
+# ============================================================
+# Central configuration for all analysis workflows
+# ============================================================
+
+# Project metadata
+project:
+  name: "mpusilla_introner_project"
+  version: "1.0.0"
+  description: "Introner insertion pattern analysis in Micromonas pusilla"
+
+# ============================================================
+# SAMPLE DEFINITIONS
+# ============================================================
+
+samples:
+  # Group 1: Intronerful strains (11 samples)
+  # Characterized by high number of introners
+  group1:
+    - CCMP1545  # Reference strain (also known as 834)
+    - RCC114
+    - RCC1614   # Has RNA-seq data
+    - RCC1698
+    - RCC2482
+    - RCC373
+    - RCC465
+    - RCC629
+    - RCC692
+    - RCC693
+    - RCC833
+
+  # Group 2: Intronerless strains (2 samples)
+  # Characterized by ~1/4 as many introners as Group 1
+  group2:
+    - RCC1749   # Reference for Group 2, has RNA-seq data
+    - RCC3052
+
+  # All samples (for convenience)
+  all:
+    - CCMP1545
+    - RCC114
+    - RCC1614
+    - RCC1698
+    - RCC1749
+    - RCC2482
+    - RCC3052
+    - RCC373
+    - RCC465
+    - RCC629
+    - RCC692
+    - RCC693
+    - RCC833
+
+  # Samples with RNA-seq data
+  with_rna_seq:
+    - CCMP1545
+    - RCC1614
+    - RCC1749
+
+  # Reference samples
+  reference:
+    group1: CCMP1545
+    group2: RCC1749
+
+  # Excluded samples (not to be used in analysis)
+  excluded:
+    - RCC835
+    - RCC647
+    - CCMP490
+
+# ============================================================
+# INPUT DATA PATHS
+# ============================================================
+
+paths:
+  # Original data locations (symlinked to data/)
+  original:
+    reads: "/scratch1/alex/pusilla/data/reads"
+    rna_seq: "/storage1/chris/introner_RNA_seq/fastq"
+    r2c2_bams: "/scratch2/russ/introner/splicing_fails/isoforms/expression_differences/realign_r2c2_consensus"
+
+  # Reference genomes
+  references:
+    ccmp1545: "/scratch1/alex/pusilla/data/ref/v3/MpusillaCCMP1545_228_v3.0.fa"
+    ccmp1545_graph: "data/assemblies_original/CCMP1545.vg_paths.fa"
+    rcc1749: "/scratch1/alex/pusilla/data/intronerless/jodie/20220622_1749_Jacobs.fasta"
+    ccmp1545_gtf: "/scratch1/chris/introner-expression-analysis/gene_annotations/MpusillaCCMP1545_228_v3.0.gene_exons.gtf"
+    annotation_info: "/scratch1/chris/mpusilla_go_analysis/mpusilla_ref_assembly/MpusillaCCMP1545_228_v3.0.annotation_info.txt"
+
+  # Pre-computed assemblies (vg_paths.fa files)
+  assemblies: "/scratch1/chris/introner-genotyping-pipeline/graph-assemblies"
+
+  # External databases for GO analysis
+  external_db:
+    interpro2go: "/scratch1/chris/mpusilla_go_analysis/data/interpro2go"
+    gene_association_tair: "/scratch1/chris/mpusilla_go_analysis/data/gene_association.tair"
+    panther_hmm: "/scratch1/chris/mpusilla_go_analysis/data/PANTHER19.0_HMM_classifications"
+
+  # Pyrho recombination maps
+  pyrho:
+    ccmp1545: "/scratch2/russ/mpusilla/pyrho/pyrho_output"
+    rcc1749: "/scratch1/chris/introner-group-comparison-analysis/RCC1749_pyrho"
+
+  # 4-fold degenerate site VCF for haplotype diversity analysis
+  fourfold_vcf: "/scratch1/chris/introner-genotyping-pipeline/popgen_snp_data/mpusilla.snps.4d.notMT.group1.allsites.vcf.gz"
+
+# ============================================================
+# OUTPUT PATHS (relative to project root)
+# ============================================================
+
+output:
+  assemblies: "results/assemblies"
+  annotations: "results/annotations"
+  genotyping:
+    root: "results/genotyping"
+    blast_results: "results/genotyping/blast_results"
+    ortholog_detection: "results/genotyping/ortholog_detection"
+    coverage: "results/genotyping/coverage"
+  evolution: "results/evolution"
+  snp_popgen:
+    root: "results/snp_popgen"
+    vcf: "results/snp_popgen/vcf"
+    phylogenetics: "results/snp_popgen/phylogenetics"
+    demography: "results/snp_popgen/demography"
+    selection: "results/snp_popgen/selection"
+  expression: "results/expression"
+  go_enrichment: "results/go_enrichment"
+  figures: "results/figures"
+
+# ============================================================
+# TOOL PARAMETERS
+# ============================================================
+
+params:
+  # BLAST parameters for introner detection
+  blast:
+    identity_threshold: 80       # Minimum percent identity
+    length_coverage_min: 0.8     # Minimum query coverage (80%)
+    length_coverage_max: 1.2     # Maximum query coverage (120%)
+    threads: 5
+
+  # BWA alignment parameters (Phase 1 - strict)
+  bwa:
+    mapq_threshold: 30           # Minimum mapping quality
+    match_length: 70             # Minimum matched bases
+    threads: 8
+
+  # BWA rescue parameters (Phase 2 - relaxed for Group1<->Group2)
+  bwa_rescue:
+    mapq_threshold: 20           # Relaxed from 30
+    match_length: 50             # Relaxed from 70
+    k: 10                        # Minimum seed length
+    W: 10                        # Band width
+    r: 1.0                       # Off-diagonal X-dropoff
+    A: 1                         # Match score
+    B: 2                         # Mismatch penalty
+
+  # Coverage calling parameters
+  coverage:
+    mapq_threshold: 30           # Minimum MAPQ for depth calculation
+    min_depth: 10                # Minimum depth for presence call
+
+  # Flanking region parameters
+  flanks:
+    extraction_length: 100       # bp to extract on each side
+    analysis_lengths: [100, 200] # bp for evolution analysis
+
+  # Similarity validation
+  similarity:
+    cutoff: 0.7                  # Minimum similarity for validation
+
+  # GATK parameters
+  gatk:
+    ploidy: 1                    # Haploid organism
+
+  # IQ-TREE parameters
+  iqtree:
+    model: "AUTO"                # Auto model selection
+    bootstrap: 1000              # Bootstrap replicates
+
+  # Dadi parameters
+  dadi:
+    polarization: "folded"       # Use folded SFS
+    conda_env: "workflow/envs/dadi-env"  # Pre-existing conda env with dadi + nlopt
+
+  # MUMmer whole-genome alignment parameters
+  mummer:
+    min_link_length: 1000        # Minimum synteny block length (bp)
+    min_identity: 80.0           # Minimum percent identity for links
+
+  # Circos visualization parameters
+  circos:
+    conda_env: "circos_env"      # Pre-existing conda env with circos + perl-gd
+    gap_threshold: 50000         # Gap threshold for ribbon merging (bp)
+    merge_threshold: 750         # Merge threshold for adjacent ribbons (bp)
+    remove_contigs: "2,1,33,30,32,40,43,24,42"  # Small/uninformative contigs to exclude
+    move_contig: 20              # Contig to reposition
+    insert_after: 25             # Insert moved contig after this one
+    insert_before: 12            # Insert moved contig before this one
+    move_contig_color: "hue080"  # Override color to match contig_25 (green)
+
+  # Introner positional correlation analysis parameters
+  introner_positional:
+    window_sizes_kb: [1, 5, 10, 20, 50]
+    families: ['all', '1', '2', '3', '4', '14', '15']
+    intra_genome_family_pairs:
+      - [2, 4]
+    intra_genome_genomes: ['CCMP1545', 'RCC1749']
+    min_alignment_coverage: 0.5
+    exclude_fixed: true
+
+  # GO enrichment parameters
+  go:
+    min_genes: 5                 # Minimum genes per category
+    fdr_threshold: 0.05          # FDR significance threshold
+    test: "fisher"               # Statistical test
+
+# ============================================================
+# PLOT CONFIGURATION
+# ============================================================
+
+plotting:
+  figsize:
+    default: [12, 8]
+    heatmap: [14, 10]
+    small: [8, 6]
+  dpi: 300
+  format: ["pdf", "png"]
+
+# ============================================================
+# RUNTIME CONFIGURATION
+# ============================================================
+
+runtime:
+  verbose: true
+  threads_default: 4
+  threads_max: 20
+
+# ============================================================
+# MATING TYPE REGION (excluded from some analyses)
+# ============================================================
+
+mating_type_region:
+  scaffold: "scaffold_2"
+  start: 49808
+  end: 1730591
