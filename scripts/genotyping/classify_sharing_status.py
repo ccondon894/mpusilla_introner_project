@@ -48,16 +48,69 @@ def load_fingerprints(fingerprint_files):
     return fps
 
 
+def get_locus_key(member):
+    """Build a comparison key for an introner based on its location type.
+
+    For CDS introners:    ('cds', codon_number, codon_offset, exon_number)
+    For intron introners: ('intron', intron_number)
+    Returns None if the member has no usable location data.
+    """
+    loc = member.get('location_type', '')
+    if loc == 'cds':
+        try:
+            return ('cds', int(member['codon_number']),
+                    int(member['codon_offset']), int(member['exon_number']))
+        except (ValueError, TypeError):
+            return None
+    if loc == 'intron':
+        try:
+            return ('intron', int(member['intron_number']))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def keys_within_tolerance(k1, k2, codon_tolerance):
+    """Check whether two locus keys point to the same biological locus.
+
+    - Both 'intron': same intron_number
+    - Both 'cds': codon_number within tolerance (offset is not required to
+      match, since small offset differences arise from annotation noise
+      in the splice site detection)
+    - Mixed 'cds' and 'intron': compatible if cds is in exon E and intron
+      is intron E (immediately after exon E) or intron E-1 (immediately
+      before exon E). Handles miniprot annotation differences where some
+      samples annotated through the introner (treating it as exonic) and
+      others split the gene around it.
+    """
+    if k1 is None or k2 is None:
+        return False
+
+    # Same location type
+    if k1[0] == k2[0]:
+        if k1[0] == 'intron':
+            return k1[1] == k2[1]
+        if k1[0] == 'cds':
+            return abs(k1[1] - k2[1]) <= codon_tolerance
+
+    # Mixed cds + intron — check exon/intron number compatibility
+    cds_key = k1 if k1[0] == 'cds' else k2 if k2[0] == 'cds' else None
+    intron_key = k1 if k1[0] == 'intron' else k2 if k2[0] == 'intron' else None
+
+    if cds_key is not None and intron_key is not None:
+        exon_num = cds_key[3]
+        intron_num = intron_key[1]
+        return intron_num == exon_num or intron_num == exon_num - 1
+
+    return False
+
+
 def classify_ortholog_group(members, codon_tolerance=CODON_TOLERANCE):
     """Classify the sharing status of an ortholog group.
 
-    Args:
-        members: list of dicts, each with keys:
-            sample, family, codon_number, codon_offset, confidence, group
-        codon_tolerance: max codon difference to consider "same position"
-
-    Returns:
-        sharing_status string for the group
+    Uses location-aware comparison: introners in CDS exons are compared by
+    codon position (with tolerance), introners in introns are compared by
+    intron number (which is invariant to miniprot exon boundary differences).
     """
     # Only compare presence=1 members with high-confidence fingerprints
     typed = [m for m in members if m['confidence'] == 'high']
@@ -70,14 +123,17 @@ def classify_ortholog_group(members, codon_tolerance=CODON_TOLERANCE):
     has_both_groups = 'G1' in groups_present and 'G2' in groups_present
 
     if not has_both_groups:
-        # All typed members are from the same group — within-group comparison
-        codon_nums = [int(m['codon_number']) for m in typed]
-        spread = max(codon_nums) - min(codon_nums)
+        # Within-group comparison: check if all members agree on the same locus
+        keys = [get_locus_key(m) for m in typed]
+        keys = [k for k in keys if k is not None]
+        if len(keys) < 2:
+            return 'uncertain'
 
-        if spread <= codon_tolerance:
+        # Check if all keys are within tolerance of the first one
+        first = keys[0]
+        if all(keys_within_tolerance(first, k, codon_tolerance) for k in keys[1:]):
             return 'consistent'
-        else:
-            return 'within_group_discordant'
+        return 'within_group_discordant'
 
     # Cross-group comparison
     g1_members = [m for m in typed if m['group'] == 'G1']
@@ -86,53 +142,48 @@ def classify_ortholog_group(members, codon_tolerance=CODON_TOLERANCE):
     if not g1_members or not g2_members:
         return 'uncertain'
 
-    # Get representative codon positions for each group
-    # Use the most common (codon, offset) within each group
+    # Get representative locus key and family for each group
     def get_consensus(group_members):
-        """Get the most common (codon, offset, family) from a group."""
         from collections import Counter
-        codon_counts = Counter(
-            (int(m['codon_number']), int(m['codon_offset'])) for m in group_members)
+        keys = [get_locus_key(m) for m in group_members]
+        keys = [k for k in keys if k is not None]
+        if not keys:
+            return None, None
+        key_counts = Counter(keys)
         family_counts = Counter(m['family'] for m in group_members)
-        return codon_counts.most_common(1)[0][0], family_counts.most_common(1)[0][0]
+        return key_counts.most_common(1)[0][0], family_counts.most_common(1)[0][0]
 
-    g1_codon, g1_family = get_consensus(g1_members)
-    g2_codon, g2_family = get_consensus(g2_members)
+    g1_key, g1_family = get_consensus(g1_members)
+    g2_key, g2_family = get_consensus(g2_members)
 
-    g1_codon_num, g1_offset = g1_codon
-    g2_codon_num, g2_offset = g2_codon
+    if g1_key is None or g2_key is None:
+        return 'uncertain'
 
-    codon_diff = abs(g1_codon_num - g2_codon_num)
-    same_offset = (g1_offset == g2_offset)
     same_family = (g1_family == g2_family)
 
-    # Classification logic
-    if codon_diff == 0 and same_offset and same_family:
+    # Check if the two keys are compatible (same locus)
+    compatible = keys_within_tolerance(g1_key, g2_key, codon_tolerance)
+
+    if not compatible:
+        return 'independent'
+
+    # Compatible: determine how strong the match is
+    # Exact match: same location type AND same position
+    same_type = g1_key[0] == g2_key[0]
+    exact_match = (g1_key == g2_key)
+
+    if exact_match and same_family:
         return 'ancestral'
 
-    if codon_diff == 0 and same_offset and not same_family:
-        # Same position, different family — could be family misannotation
-        # or convergent insertion at a hotspot
+    if exact_match and not same_family:
         return 'same_site_diff_family'
 
-    if codon_diff <= codon_tolerance and same_offset and same_family:
-        # Small positional difference likely from annotation imprecision
+    # Compatible but not exact (e.g., cds vs intron compatibility, or
+    # cds with codon difference within tolerance)
+    if same_family:
         return 'ambiguous'
 
-    if codon_diff <= codon_tolerance and same_offset and not same_family:
-        return 'ambiguous_diff_family'
-
-    if not same_family:
-        return 'independent'
-
-    if codon_diff > codon_tolerance:
-        return 'independent'
-
-    if not same_offset and codon_diff <= codon_tolerance:
-        # Different phase but close — likely independent
-        return 'independent'
-
-    return 'ambiguous'
+    return 'ambiguous_diff_family'
 
 
 def main():
@@ -194,8 +245,11 @@ def main():
                 'sample': sample,
                 'group': group,
                 'family': row['family'],
+                'location_type': fp.get('location_type', ''),
                 'codon_number': fp.get('codon_number', ''),
                 'codon_offset': fp.get('codon_offset', ''),
+                'exon_number': fp.get('exon_number', ''),
+                'intron_number': fp.get('intron_number', ''),
                 'confidence': fp.get('confidence', 'no_fingerprint'),
                 'gene_id': fp.get('gene_id', ''),
             })
@@ -207,15 +261,21 @@ def main():
         # Store summary for this group
         if members:
             typed = [m for m in members if m['confidence'] == 'high']
+
+            def format_locus(m):
+                if m['location_type'] == 'cds':
+                    return f"{m['sample']}:cds.{m['codon_number']}.{m['codon_offset']}"
+                if m['location_type'] == 'intron':
+                    return f"{m['sample']}:intron.{m['intron_number']}"
+                return f"{m['sample']}:?"
+
             group_summaries.append({
                 'ortholog_id': oid,
                 'sharing_status': status,
                 'n_present': len(members),
                 'n_fingerprinted': len(typed),
                 'families': ';'.join(sorted(set(m['family'] for m in members))),
-                'codons': ';'.join(
-                    f"{m['sample']}:{m['codon_number']}.{m['codon_offset']}"
-                    for m in typed),
+                'loci': ';'.join(format_locus(m) for m in typed),
             })
 
         # Assign status to all rows in this group
@@ -241,7 +301,7 @@ def main():
     # Write optional summary
     if args.summary:
         summary_fields = ['ortholog_id', 'sharing_status', 'n_present',
-                          'n_fingerprinted', 'families', 'codons']
+                          'n_fingerprinted', 'families', 'loci']
         with open(args.summary, 'w', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=summary_fields, delimiter='\t')
             writer.writeheader()

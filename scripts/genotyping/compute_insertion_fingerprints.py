@@ -124,16 +124,21 @@ def find_donor_on_minus_strand(body_seq, search_window=SPLICE_SEARCH_WINDOW):
 
 
 def compute_cds_position(insertion_pos_1based, cds_exons, strand):
-    """Compute CDS-relative position of the last exonic nucleotide before the intron.
+    """Locate an insertion site within a gene's CDS structure.
 
     For + strand: CDS exons ordered by ascending genomic position (5' to 3').
     For - strand: CDS exons ordered by descending genomic position (5' to 3').
 
-    Handles both cases:
-    - Insertion site within a CDS exon (miniprot annotated through the introner)
-    - Insertion site between CDS exons (miniprot split the gene around the introner)
+    Returns a tuple (location_type, cds_position, exon_or_intron_number):
+      - ('cds', cds_position, exon_number): inside a CDS exon
+      - ('intron', None, intron_number): in a gap between CDS exons
+        (intron_number is 1-indexed in transcript order — intron 1 is between
+        the first and second CDS exons)
+      - (None, None, None): outside the entire CDS
 
-    Returns 0-based CDS position or None if not mappable.
+    Both exon_number and intron_number are 1-indexed in transcript order.
+    They are invariant to small differences in exon boundary annotations
+    between samples, which makes them stable comparison keys.
     """
     if strand == '+':
         sorted_exons = sorted(cds_exons, key=lambda x: x['start'])
@@ -143,18 +148,20 @@ def compute_cds_position(insertion_pos_1based, cds_exons, strand):
             exon_len = exon['end'] - exon['start'] + 1
 
             if insertion_pos_1based < exon['start']:
-                # In a gap before this exon
                 if i == 0:
-                    return None  # Before entire CDS
-                return cds_offset - 1  # End of previous exon
+                    return None, None, None  # Before entire CDS
+                # In intron i (1-indexed): between exon i and exon i+1
+                # in transcript order. Since i is 0-indexed here, this is
+                # intron i in 1-indexed transcript order.
+                return 'intron', None, i
 
             if insertion_pos_1based <= exon['end']:
-                # Within this exon
-                return cds_offset + (insertion_pos_1based - exon['start'])
+                # In exon i+1 (1-indexed)
+                return 'cds', cds_offset + (insertion_pos_1based - exon['start']), i + 1
 
             cds_offset += exon_len
 
-        return None  # After entire CDS
+        return None, None, None  # After entire CDS
 
     else:  # '-' strand
         sorted_exons = sorted(cds_exons, key=lambda x: x['start'], reverse=True)
@@ -164,18 +171,16 @@ def compute_cds_position(insertion_pos_1based, cds_exons, strand):
             exon_len = exon['end'] - exon['start'] + 1
 
             if insertion_pos_1based > exon['end']:
-                # In a gap before this exon (in transcript order)
                 if i == 0:
-                    return None
-                return cds_offset - 1
+                    return None, None, None
+                return 'intron', None, i
 
             if insertion_pos_1based >= exon['start']:
-                # Within this exon
-                return cds_offset + (exon['end'] - insertion_pos_1based)
+                return 'cds', cds_offset + (exon['end'] - insertion_pos_1based), i + 1
 
             cds_offset += exon_len
 
-        return None
+        return None, None, None
 
 
 def main():
@@ -229,9 +234,12 @@ def main():
                 'gene_id': '',
                 'strand': '',
                 'insertion_pos': '',
+                'location_type': '',
                 'cds_position': '',
                 'codon_number': '',
                 'codon_offset': '',
+                'exon_number': '',
+                'intron_number': '',
                 'confidence': '',
             }
 
@@ -315,20 +323,27 @@ def main():
             result['insertion_pos'] = last_exonic_0
 
             # --- Map to CDS coordinates ---
-            cds_pos = compute_cds_position(insertion_pos_1, cds_on_contig, strand)
+            location_type, cds_pos, exon_or_intron = compute_cds_position(
+                insertion_pos_1, cds_on_contig, strand)
 
-            if cds_pos is None:
+            if location_type is None:
                 stats['not_in_cds'] += 1
                 result['confidence'] = 'not_in_cds'
                 results.append(result)
                 continue
 
-            codon_number = cds_pos // 3
-            codon_offset = cds_pos % 3
+            result['location_type'] = location_type
 
-            result['cds_position'] = cds_pos
-            result['codon_number'] = codon_number
-            result['codon_offset'] = codon_offset
+            if location_type == 'cds':
+                result['cds_position'] = cds_pos
+                result['codon_number'] = cds_pos // 3
+                result['codon_offset'] = cds_pos % 3
+                result['exon_number'] = exon_or_intron
+                stats['cds_success'] += 1
+            else:  # 'intron'
+                result['intron_number'] = exon_or_intron
+                stats['intron_success'] += 1
+
             result['confidence'] = 'high'
             stats['success'] += 1
             results.append(result)
@@ -340,6 +355,8 @@ def main():
     print(f"  Total loci:         {stats['total']}")
     print(f"  Successful:         {stats['success']} "
           f"({100 * stats['success'] / max(1, stats['total']):.1f}%)")
+    print(f"    in CDS exon:      {stats['cds_success']}")
+    print(f"    in intron:        {stats['intron_success']}")
     print(f"  No gene annotation: {stats['no_gene']}")
     print(f"  Gene not in GTF:    {stats['gene_not_in_gtf']}")
     print(f"  No CDS on contig:   {stats['no_cds_on_contig']}")
@@ -352,8 +369,9 @@ def main():
 
     # Write output
     fieldnames = ['sample', 'introner_id', 'contig', 'start', 'end', 'family',
-                  'gene_id', 'strand', 'insertion_pos', 'cds_position',
-                  'codon_number', 'codon_offset', 'confidence']
+                  'gene_id', 'strand', 'insertion_pos', 'location_type',
+                  'cds_position', 'codon_number', 'codon_offset',
+                  'exon_number', 'intron_number', 'confidence']
 
     with open(args.output, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t')
