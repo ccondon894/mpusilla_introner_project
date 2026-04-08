@@ -541,6 +541,9 @@ rule split_overmerged_orthologs:
         fingerprints = expand(
             GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
             sample=ALL_SAMPLES),
+        beds = expand(
+            BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
+            sample=ALL_SAMPLES),
         tandems = expand(
             GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.tandems.tsv",
             sample=ALL_SAMPLES)
@@ -554,6 +557,7 @@ rule split_overmerged_orthologs:
         python {PROJECT_ROOT}/scripts/genotyping/split_overmerged_orthologs.py \
             --matrix {input.verified_matrix} \
             --fingerprints {input.fingerprints} \
+            --beds {input.beds} \
             --tandems {input.tandems} \
             --output {output.split_matrix} \
             --mapping {output.mapping} \
