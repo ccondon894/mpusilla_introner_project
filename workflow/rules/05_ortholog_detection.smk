@@ -480,6 +480,49 @@ rule classify_sharing_status:
         """
 
 
+rule compare_introner_sequences:
+    """
+    Compare introner body sequences within ortholog groups to refine sharing status.
+
+    Extracts introner body sequences from indexed genome FASTAs and computes
+    pairwise sequence identity. Combines with codon-level sharing_status from
+    classify_sharing_status to produce a refined classification using two
+    thresholds:
+      - within-group identity (default 0.80): catches paralog/mismapping
+        issues in within-group ortholog groups
+      - cross-group identity (default 0.60): accommodates substantial
+        Group1↔Group2 divergence while still distinguishing ancestral
+        introners from independent insertions
+
+    Adds columns: cross_group_identity, within_group_identity,
+    refined_sharing_status. All codon-level results are preserved.
+    """
+    input:
+        verified_matrix = GENOTYPING_DIR / "genotype_matrix.verified.tsv",
+        genome_indices = expand(
+            ASSEMBLIES_DIR / "{sample}.vg_paths.fa.fai",
+            sample=ALL_SAMPLES)
+    output:
+        seq_verified_matrix = GENOTYPING_DIR / "genotype_matrix.seq_verified.tsv",
+        summary = GENOTYPING_DIR / "insertion_fingerprints" / "sequence_comparison_summary.tsv"
+    params:
+        genome_dir = ASSEMBLIES_DIR,
+        flanking_length = FLANK_LENGTH,
+        within_threshold = 0.80,
+        cross_threshold = 0.60
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/compare_introner_sequences.py \
+            --matrix {input.verified_matrix} \
+            --genome-dir {params.genome_dir} \
+            --output {output.seq_verified_matrix} \
+            --summary {output.summary} \
+            --flanking-length {params.flanking_length} \
+            --within-group-identity-threshold {params.within_threshold} \
+            --cross-group-identity-threshold {params.cross_threshold}
+        """
+
+
 rule annotate_missing_data:
     """
     Annotate missing gene and family data in the genotype matrix.
@@ -494,7 +537,7 @@ rule annotate_missing_data:
     Output: Fully annotated genotype matrix ready for downstream analysis
     """
     input:
-        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.verified.tsv",
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.seq_verified.tsv",
         gene_beds = [PROCESSED_ANN_DIR / f"{sample}.gene.bed" for sample in ALL_SAMPLES],
         fasta_files = [BLAST_DIR / f"{sample}.candidate_loci.filtered.fa" for sample in ALL_SAMPLES]
     output:
