@@ -126,6 +126,41 @@ rule compute_insertion_fingerprints:
         """
 
 
+rule detect_tandem_duplicates:
+    """
+    Detect tandem duplications within each sample's introner candidate loci.
+
+    For each pair of introners in the same sample within a configurable
+    genomic window, checks if their body sequences have very high identity.
+    Groups them into tandem clusters via union-find.
+
+    Tandem clusters arise from gene duplications and produce introners
+    that the flank-based ortholog detection cannot distinguish (because
+    their flanking regions are also duplicated). The output is used to
+    flag affected ortholog groups in the splitting step.
+    """
+    input:
+        bed = BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
+        genome = ASSEMBLIES_DIR / "{sample}.vg_paths.fa",
+        genome_index = ASSEMBLIES_DIR / "{sample}.vg_paths.fa.fai"
+    output:
+        tandems = GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.tandems.tsv"
+    params:
+        window_bp = 10000,
+        min_identity = 0.95
+    shell:
+        """
+        mkdir -p {GENOTYPING_DIR}/insertion_fingerprints
+        python {PROJECT_ROOT}/scripts/genotyping/detect_tandem_duplicates.py \
+            --bed {input.bed} \
+            --genome {input.genome} \
+            --sample {wildcards.sample} \
+            --output {output.tandems} \
+            --window-bp {params.window_bp} \
+            --min-identity {params.min_identity}
+        """
+
+
 # ============================================================
 # PHASE 1A: Synteny-Based Context Mapping
 # ============================================================
@@ -480,6 +515,80 @@ rule classify_sharing_status:
         """
 
 
+rule split_overmerged_orthologs:
+    """
+    Split over-merged ortholog groups using codon/intron position clusters.
+
+    The flank-based ortholog detection can incorrectly merge introners
+    that are at distinct positions within the same gene because their
+    flanking sequences are similar (especially in tandem duplications,
+    paralogous gene copies, or genes with internal repeats).
+
+    This rule uses the codon/intron fingerprints to identify ortholog
+    groups where Group 1 OR Group 2 contains members at multiple distinct
+    positions (within-group over-merge). Such groups are split into
+    separate sub-ortholog-groups, one per position cluster.
+
+    Cross-group differences (G1 at one position, G2 at another) are
+    NOT split — they represent meaningful biology (independent insertions
+    at the same approximate locus).
+
+    The split matrix preserves the original ortholog ID in a new column
+    so that the original flank-based grouping can still be referenced.
+    """
+    input:
+        verified_matrix = GENOTYPING_DIR / "genotype_matrix.verified.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES),
+        tandems = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.tandems.tsv",
+            sample=ALL_SAMPLES)
+    output:
+        split_matrix = GENOTYPING_DIR / "genotype_matrix.split.tsv",
+        mapping = GENOTYPING_DIR / "insertion_fingerprints" / "split_mapping.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/split_overmerged_orthologs.py \
+            --matrix {input.verified_matrix} \
+            --fingerprints {input.fingerprints} \
+            --tandems {input.tandems} \
+            --output {output.split_matrix} \
+            --mapping {output.mapping} \
+            --codon-tolerance {params.codon_tolerance}
+        """
+
+
+rule reclassify_after_split:
+    """
+    Re-run sharing status classification on the split matrix.
+
+    The splitting changes ortholog group composition, so within-group
+    consistency and cross-group classifications must be recomputed.
+    """
+    input:
+        split_matrix = GENOTYPING_DIR / "genotype_matrix.split.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES)
+    output:
+        reclassified_matrix = GENOTYPING_DIR / "genotype_matrix.split_verified.tsv",
+        summary = GENOTYPING_DIR / "insertion_fingerprints" / "sharing_summary_split.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/classify_sharing_status.py \
+            --matrix {input.split_matrix} \
+            --fingerprints {input.fingerprints} \
+            --output {output.reclassified_matrix} \
+            --summary {output.summary} \
+            --codon-tolerance {params.codon_tolerance}
+        """
+
+
 rule compare_introner_sequences:
     """
     Compare introner body sequences within ortholog groups to refine sharing status.
@@ -498,7 +607,7 @@ rule compare_introner_sequences:
     refined_sharing_status. All codon-level results are preserved.
     """
     input:
-        verified_matrix = GENOTYPING_DIR / "genotype_matrix.verified.tsv",
+        verified_matrix = GENOTYPING_DIR / "genotype_matrix.split_verified.tsv",
         genome_indices = expand(
             ASSEMBLIES_DIR / "{sample}.vg_paths.fa.fai",
             sample=ALL_SAMPLES)

@@ -70,6 +70,46 @@ def get_locus_key(member):
     return None
 
 
+def cluster_keys(keys, codon_tolerance):
+    """Cluster a list of locus keys using union-find with chained merging.
+
+    Two keys are in the same cluster if they're compatible (via
+    keys_within_tolerance), allowing transitive merging. This handles
+    both:
+      - Continuous noisy distributions (e.g. codons 422-433 within tolerance 3
+        with chained merging form one cluster), AND
+      - Clean discrete clusters (e.g. codons 282 and 313 with gap > tolerance
+        form two separate clusters).
+
+    Returns list of clusters, where each cluster is a list of indices into keys.
+    """
+    n = len(keys)
+    if n == 0:
+        return []
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if keys_within_tolerance(keys[i], keys[j], codon_tolerance):
+                union(i, j)
+
+    clusters = defaultdict(list)
+    for i in range(n):
+        clusters[find(i)].append(i)
+    return list(clusters.values())
+
+
 def keys_within_tolerance(k1, k2, codon_tolerance):
     """Check whether two locus keys point to the same biological locus.
 
@@ -123,15 +163,18 @@ def classify_ortholog_group(members, codon_tolerance=CODON_TOLERANCE):
     has_both_groups = 'G1' in groups_present and 'G2' in groups_present
 
     if not has_both_groups:
-        # Within-group comparison: check if all members agree on the same locus
+        # Within-group comparison: cluster members and check if they all
+        # collapse into a single cluster. Chained union-find clustering
+        # correctly handles continuous distributions (annotation noise)
+        # by transitively merging members within tolerance, while still
+        # separating clear discrete clusters with gaps > tolerance.
         keys = [get_locus_key(m) for m in typed]
         keys = [k for k in keys if k is not None]
         if len(keys) < 2:
             return 'uncertain'
 
-        # Check if all keys are within tolerance of the first one
-        first = keys[0]
-        if all(keys_within_tolerance(first, k, codon_tolerance) for k in keys[1:]):
+        clusters = cluster_keys(keys, codon_tolerance)
+        if len(clusters) == 1:
             return 'consistent'
         return 'within_group_discordant'
 
