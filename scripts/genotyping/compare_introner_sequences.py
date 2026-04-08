@@ -84,25 +84,15 @@ def make_aligner():
 def compute_identity_from_alignment(alignment):
     """Compute sequence identity from a PairwiseAligner alignment.
 
-    Identity = matching non-gap positions / total non-gap positions.
+    Identity = identities / (identities + mismatches + gaps).
+    Uses alignment.counts() which directly tracks matches, mismatches,
+    and gaps across the entire alignment.
     """
-    aligned = alignment.format().split('\n')
-    # PairwiseAligner.format() gives: seq1\n annotation\n seq2\n
-    # But the format may vary; use the aligned sequences directly
-    seq1_aligned = aligned[0]
-    seq2_aligned = aligned[2]
-
-    matches = 0
-    non_gap = 0
-    for a, b in zip(seq1_aligned, seq2_aligned):
-        if a != '-' or b != '-':
-            non_gap += 1
-            if a == b and a != '-':
-                matches += 1
-
-    if non_gap == 0:
+    counts = alignment.counts()
+    total = counts.identities + counts.mismatches + counts.gaps
+    if total == 0:
         return 0.0
-    return matches / non_gap
+    return counts.identities / total
 
 
 def pairwise_identity(seq1, seq2, aligner):
@@ -201,47 +191,70 @@ def refine_status(sharing_status, within_identity, cross_identity,
                   within_threshold, cross_threshold):
     """Combine codon-level sharing_status with sequence identity evidence.
 
-    Uses two distinct thresholds:
-      - within_threshold: applied to within-group-only ortholog groups, where
-        high identity is expected (~92% median in practice)
-      - cross_threshold: applied to cross-group ortholog groups, where
-        substantial divergence between groups is expected
+    Conservative approach: codon evidence is primary for ancestral vs
+    independent calls. Sequence identity is only the deciding factor for
+    'uncertain' groups (no codon data, mostly intergenic loci) and as a
+    secondary flag for outlier cases.
 
-    Returns refined_sharing_status string.
+    Rationale: empirically, cross-group sequence identity correlates more
+    with introner family relatedness than with shared insertion ancestry.
+    A pair of family-2 introners will share ~60-80% identity whether or
+    not they came from the same ancestral insertion. Codon position is
+    the more direct evidence for the insertion event itself.
+
+    Two thresholds:
+      - within_threshold: catches paralog/mismapping in within-group
+        ortholog groups where high identity is expected
+      - cross_threshold: used only for uncertain/intergenic loci where
+        no codon evidence is available
     """
-    # Within-group-only ortholog groups: use within-group identity check
+    # Within-group ortholog groups
     if sharing_status == 'consistent':
         if within_identity is None:
             return 'consistent'
         if within_identity >= within_threshold:
-            return 'consistent_confirmed'
+            return 'consistent'
         return 'consistent_low_identity'
 
     if sharing_status == 'within_group_discordant':
         return 'within_group_discordant'
 
-    # Cross-group ortholog groups: use cross-group identity check
-    if cross_identity is None:
-        return sharing_status
+    # Cross-group ortholog groups: codon evidence is primary
+    if sharing_status == 'ancestral':
+        # Exact codon match + same family. Codon evidence is sufficient.
+        # Flag if sequence identity is unusually low (potential convergent).
+        if cross_identity is not None and cross_identity < cross_threshold:
+            return 'ancestral_low_identity'
+        return 'ancestral'
 
-    high_cross = cross_identity >= cross_threshold
+    if sharing_status == 'same_site_diff_family':
+        # Exact codon match but different families. Preserve as flagged
+        # for review regardless of sequence identity.
+        return 'same_site_diff_family'
 
-    mapping = {
-        ('ancestral', True): 'ancestral_confirmed',
-        ('ancestral', False): 'convergent_same_site',
-        ('same_site_diff_family', True): 'ancestral_diff_family',
-        ('same_site_diff_family', False): 'convergent_same_site',
-        ('ambiguous', True): 'ancestral_resolved',
-        ('ambiguous', False): 'independent_resolved',
-        ('ambiguous_diff_family', True): 'ambiguous',
-        ('ambiguous_diff_family', False): 'independent_resolved',
-        ('independent', True): 'independent',
-        ('independent', False): 'independent',
-        ('uncertain', True): 'likely_ancestral',
-        ('uncertain', False): 'likely_independent',
-    }
+    if sharing_status == 'ambiguous':
+        # Close codon position (within tolerance), same family. Cannot
+        # make a confident call from codon data alone, and sequence
+        # identity is not a reliable discriminator at this scale.
+        return 'ambiguous'
 
-    return mapping.get((sharing_status, high_cross), sharing_status)
+    if sharing_status == 'ambiguous_diff_family':
+        return 'ambiguous_diff_family'
+
+    if sharing_status == 'independent':
+        # Codon evidence is definitive: different positions or families.
+        return 'independent'
+
+    if sharing_status == 'uncertain':
+        # No codon data available (mostly intergenic loci).
+        # Sequence identity is the only available evidence here.
+        if cross_identity is None:
+            return 'uncertain'
+        if cross_identity >= cross_threshold:
+            return 'likely_ancestral'
+        return 'likely_independent'
+
+    return sharing_status
 
 
 def main():
