@@ -544,6 +544,9 @@ rule split_overmerged_orthologs:
         beds = expand(
             BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
             sample=ALL_SAMPLES),
+        gtfs = expand(
+            ANNOTATIONS_DIR / "{sample}.gtf",
+            sample=ALL_SAMPLES),
         tandems = expand(
             GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.tandems.tsv",
             sample=ALL_SAMPLES)
@@ -558,6 +561,7 @@ rule split_overmerged_orthologs:
             --matrix {input.verified_matrix} \
             --fingerprints {input.fingerprints} \
             --beds {input.beds} \
+            --gtfs {input.gtfs} \
             --tandems {input.tandems} \
             --output {output.split_matrix} \
             --mapping {output.mapping} \

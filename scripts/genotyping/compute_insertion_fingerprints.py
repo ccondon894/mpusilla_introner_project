@@ -35,6 +35,12 @@ import pysam
 FLANK_LENGTH = 100
 SPLICE_SEARCH_WINDOW = 20
 
+# Insertions within this many codons of an exon end (or start) are reclassified
+# as the adjacent intron, since they sit at the splice site boundary. This
+# handles cases where miniprot annotated different exon lengths in different
+# samples but the introner is at the same biological intron-exon junction.
+BOUNDARY_CODON_TOLERANCE = 3
+
 
 def parse_gtf_cds(gtf_path):
     """Parse CDS features from GTF, grouped by gene_id.
@@ -123,7 +129,8 @@ def find_donor_on_minus_strand(body_seq, search_window=SPLICE_SEARCH_WINDOW):
     return None, None
 
 
-def compute_cds_position(insertion_pos_1based, cds_exons, strand):
+def compute_cds_position(insertion_pos_1based, cds_exons, strand,
+                          boundary_codon_tolerance=BOUNDARY_CODON_TOLERANCE):
     """Locate an insertion site within a gene's CDS structure.
 
     For + strand: CDS exons ordered by ascending genomic position (5' to 3').
@@ -131,14 +138,15 @@ def compute_cds_position(insertion_pos_1based, cds_exons, strand):
 
     Returns a tuple (location_type, cds_position, exon_or_intron_number):
       - ('cds', cds_position, exon_number): inside a CDS exon
-      - ('intron', None, intron_number): in a gap between CDS exons
-        (intron_number is 1-indexed in transcript order — intron 1 is between
-        the first and second CDS exons)
+      - ('intron', None, intron_number): in a gap between CDS exons OR within
+        boundary_codon_tolerance codons of an exon edge. Insertions at the
+        last few codons of exon N (or first few codons of exon N+1) are
+        treated as "intron N" because they sit at the splice junction. This
+        handles miniprot exon length annotation differences for boundary
+        insertions.
       - (None, None, None): outside the entire CDS
 
     Both exon_number and intron_number are 1-indexed in transcript order.
-    They are invariant to small differences in exon boundary annotations
-    between samples, which makes them stable comparison keys.
     """
     if strand == '+':
         sorted_exons = sorted(cds_exons, key=lambda x: x['start'])
@@ -149,19 +157,33 @@ def compute_cds_position(insertion_pos_1based, cds_exons, strand):
 
             if insertion_pos_1based < exon['start']:
                 if i == 0:
-                    return None, None, None  # Before entire CDS
-                # In intron i (1-indexed): between exon i and exon i+1
-                # in transcript order. Since i is 0-indexed here, this is
-                # intron i in 1-indexed transcript order.
+                    return None, None, None
                 return 'intron', None, i
 
             if insertion_pos_1based <= exon['end']:
-                # In exon i+1 (1-indexed)
-                return 'cds', cds_offset + (insertion_pos_1based - exon['start']), i + 1
+                # Inside exon i+1 (1-indexed in transcript order)
+                # Compute position within exon and check if it's near a boundary
+                pos_in_exon = insertion_pos_1based - exon['start']
+                codon_in_exon = pos_in_exon // 3
+                exon_codon_count = exon_len // 3
+                boundary_nt = boundary_codon_tolerance * 3
+
+                # Within boundary_nt of the END of this exon → next intron
+                # (only if there IS a next exon)
+                if (i + 1 < len(sorted_exons) and
+                        (exon['end'] - insertion_pos_1based) < boundary_nt):
+                    return 'intron', None, i + 1
+
+                # Within boundary_nt of the START of this exon → previous intron
+                # (only if there IS a previous exon)
+                if i > 0 and (insertion_pos_1based - exon['start']) < boundary_nt:
+                    return 'intron', None, i
+
+                return 'cds', cds_offset + pos_in_exon, i + 1
 
             cds_offset += exon_len
 
-        return None, None, None  # After entire CDS
+        return None, None, None
 
     else:  # '-' strand
         sorted_exons = sorted(cds_exons, key=lambda x: x['start'], reverse=True)
@@ -176,7 +198,23 @@ def compute_cds_position(insertion_pos_1based, cds_exons, strand):
                 return 'intron', None, i
 
             if insertion_pos_1based >= exon['start']:
-                return 'cds', cds_offset + (exon['end'] - insertion_pos_1based), i + 1
+                # Inside exon i+1 in transcript order (- strand: high coords first)
+                pos_in_exon = exon['end'] - insertion_pos_1based
+                boundary_nt = boundary_codon_tolerance * 3
+
+                # On - strand, the END of an exon (in transcript order) is at
+                # the LOW genomic coordinate. So "near the end" means
+                # insertion_pos is close to exon['start'].
+                if (i + 1 < len(sorted_exons) and
+                        (insertion_pos_1based - exon['start']) < boundary_nt):
+                    return 'intron', None, i + 1
+
+                # Near the START of the exon (in transcript order) = near the
+                # HIGH genomic coordinate.
+                if i > 0 and (exon['end'] - insertion_pos_1based) < boundary_nt:
+                    return 'intron', None, i
+
+                return 'cds', cds_offset + pos_in_exon, i + 1
 
             cds_offset += exon_len
 

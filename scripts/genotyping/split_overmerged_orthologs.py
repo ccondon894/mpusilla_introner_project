@@ -39,6 +39,7 @@ from collections import Counter, defaultdict
 
 GROUP2_SAMPLES = {'RCC1749', 'RCC3052'}
 CODON_TOLERANCE = 3
+FLANK_LENGTH = 100  # used to back-compute BED-style coordinates from body span
 
 
 def get_locus_key(fp):
@@ -152,6 +153,112 @@ def load_tandems(tandem_files):
     return tandems
 
 
+def load_gtf_cds(gtf_files):
+    """Load CDS exons by (sample, gene_id) for absent-sample coordinate lookup.
+
+    Returns dict: (sample, gene_id) -> list of CDS dicts with contig, start,
+    end, strand. Sample is parsed from the filename.
+    """
+    cds_by_sample_gene = defaultdict(list)
+    for gtf_file in gtf_files:
+        sample = os.path.basename(gtf_file).split('.')[0]
+        with open(gtf_file) as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                fields = line.strip().split('\t')
+                if len(fields) < 9 or fields[2] != 'CDS':
+                    continue
+                gene_id = None
+                for attr in fields[8].split(';'):
+                    attr = attr.strip()
+                    if attr.startswith('gene_id'):
+                        gene_id = attr.split('"')[1]
+                        break
+                if gene_id:
+                    cds_by_sample_gene[(sample, gene_id)].append({
+                        'contig': fields[0],
+                        'start': int(fields[3]),  # 1-based GTF
+                        'end': int(fields[4]),
+                        'strand': fields[6],
+                    })
+    return cds_by_sample_gene
+
+
+def locate_consensus_in_gtf(sample, gene_id, locus_key, cds_by_sample_gene):
+    """Find the genomic coordinates of a consensus locus in a sample's GTF.
+
+    Args:
+        sample: sample name
+        gene_id: target gene
+        locus_key: ('cds', codon, offset, exon) or ('intron', intron_num)
+        cds_by_sample_gene: GTF index
+
+    Returns:
+        (contig, start, end, strand) where start/end are 0-based BED coords
+        for a 305bp window matching the typical introner BED format
+        (200bp body + 100bp flanks on each side, but here just 200bp body
+        plus a 100bp window on each side as a placeholder for visualization).
+        Returns None if the gene is not in the sample or the locus can't be
+        located.
+    """
+    cds = cds_by_sample_gene.get((sample, gene_id), [])
+    if not cds:
+        return None
+
+    strand = cds[0]['strand']
+    if strand == '+':
+        sorted_exons = sorted(cds, key=lambda x: x['start'])
+    else:
+        sorted_exons = sorted(cds, key=lambda x: x['start'], reverse=True)
+
+    if locus_key[0] == 'intron':
+        intron_num = locus_key[1]  # 1-indexed
+        # Intron N is between transcript exon N and exon N+1
+        if intron_num < 1 or intron_num >= len(sorted_exons):
+            return None
+        exon_before = sorted_exons[intron_num - 1]
+        exon_after = sorted_exons[intron_num]
+
+        if strand == '+':
+            # Intron is between exon_before.end and exon_after.start
+            intron_start = exon_before['end']  # 1-based, last exonic nt
+            intron_end = exon_after['start']   # 1-based, first exonic nt
+        else:
+            # On - strand, exon_before is at higher genomic coords
+            intron_start = exon_after['end']
+            intron_end = exon_before['start']
+
+        # Build a BED-style window around the intron region
+        # Use a flank-padded window of the intron
+        bed_start = max(0, intron_start - 1 - FLANK_LENGTH)
+        bed_end = intron_end + FLANK_LENGTH
+        return (sorted_exons[0]['contig'], bed_start, bed_end, strand)
+
+    if locus_key[0] == 'cds':
+        codon_num = locus_key[1]
+        codon_offset = locus_key[2]
+        target_cds_pos = codon_num * 3 + codon_offset
+
+        cds_offset = 0
+        for exon in sorted_exons:
+            exon_len = exon['end'] - exon['start'] + 1
+            if cds_offset + exon_len > target_cds_pos:
+                pos_in_exon = target_cds_pos - cds_offset
+                if strand == '+':
+                    insertion_genomic_1 = exon['start'] + pos_in_exon
+                else:
+                    insertion_genomic_1 = exon['end'] - pos_in_exon
+                # 1-based -> 0-based BED
+                bed_start = max(0, insertion_genomic_1 - 1 - FLANK_LENGTH)
+                bed_end = insertion_genomic_1 + FLANK_LENGTH
+                return (exon['contig'], bed_start, bed_end, strand)
+            cds_offset += exon_len
+        return None
+
+    return None
+
+
 def find_matching_fingerprint(sample_gene_fps, target_key, codon_tolerance,
                                 used_coords):
     """Search a sample's fingerprints for one matching a target locus key.
@@ -209,29 +316,55 @@ def build_recovered_row(template_row, bed_row, fp_row, presence='1'):
     return new_row
 
 
-def build_absent_row(template_row, presence='2'):
-    """Build a new 'absent' row for a sample at a sub-locus.
+def build_absent_row(template_row, presence='2', locus_coords=None,
+                      consensus_gene=''):
+    """Build a new 'absent' or 'missing' row for a sample at a sub-locus.
 
-    Inherits the sample identity from the template but clears coordinates.
+    For presence=2 (absent): records the genomic coordinates where the
+    introner WOULD have been if it were present, looked up via the consensus
+    locus position in the sample's GTF. This makes the absent calls
+    biologically locatable rather than just marked as missing.
+
+    For presence=3 (missing data): leaves coordinates blank.
+
+    Args:
+        template_row: an existing matrix row from this sample to inherit
+            sample/identity fields from
+        presence: '2' for absent, '3' for missing
+        locus_coords: tuple (contig, bed_start, bed_end, strand) from
+            locate_consensus_in_gtf, or None
+        consensus_gene: the gene_id at the consensus locus
     """
     new_row = dict(template_row)
-    new_row['contig'] = ''
-    new_row['start'] = ''
-    new_row['end'] = ''
-    new_row['sequence_id'] = ''
-    new_row['family'] = ''
-    new_row['gene'] = ''
-    new_row['splice_site'] = ''
-    new_row['orientation'] = ''
     new_row['presence'] = presence
+    new_row['family'] = ''
+    new_row['splice_site'] = ''
     new_row['left_reverse'] = ''
     new_row['right_reverse'] = ''
+
+    if presence == '2' and locus_coords is not None:
+        contig, bed_start, bed_end, strand = locus_coords
+        new_row['contig'] = contig
+        new_row['start'] = bed_start
+        new_row['end'] = bed_end
+        new_row['sequence_id'] = f"{contig}:{bed_start}-{bed_end}"
+        new_row['gene'] = consensus_gene
+        new_row['orientation'] = 'forward' if strand == '+' else 'reverse'
+    else:
+        # presence=3 (missing data) or no GTF lookup possible
+        new_row['contig'] = ''
+        new_row['start'] = ''
+        new_row['end'] = ''
+        new_row['sequence_id'] = ''
+        new_row['gene'] = ''
+        new_row['orientation'] = ''
+
     return new_row
 
 
 def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
                                 fps_by_sample_gene, beds_by_coord, tandems,
-                                codon_tolerance):
+                                cds_by_sample_gene, codon_tolerance):
     """Split an ortholog group, recovering lost introners.
 
     Returns a list of (new_id, [matrix_rows]) tuples. Each tuple represents
@@ -376,13 +509,22 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
                         has_tandem_flags[ci] = True
                     continue
 
-            # No recovery possible — mark as absent at this sub-locus
-            # Inherit original presence value: if it was 3 (missing), keep 3
+            # No recovery possible — mark as absent at this sub-locus.
+            # Inherit original presence value: if it was 3 (missing), keep 3.
+            # For presence=2, look up the consensus locus in this sample's
+            # GTF to record where the introner WOULD have been.
             original_presence = template['presence']
             if original_presence == '3':
                 new_row = build_absent_row(template, presence='3')
             else:
-                new_row = build_absent_row(template, presence='2')
+                locus_coords = None
+                if cgene:
+                    locus_coords = locate_consensus_in_gtf(
+                        sample, cgene, ckey, cds_by_sample_gene)
+                new_row = build_absent_row(
+                    template, presence='2',
+                    locus_coords=locus_coords,
+                    consensus_gene=cgene)
             sub_group_rows[ci].append(new_row)
 
     # Step 8: Build sub-group results
@@ -405,6 +547,8 @@ def main():
                         help='Per-sample fingerprint TSV files')
     parser.add_argument('--beds', required=True, nargs='+',
                         help='Per-sample BED files (candidate_loci.filtered.bed)')
+    parser.add_argument('--gtfs', required=True, nargs='+',
+                        help='Per-sample GTF files (for absent-row coordinate lookup)')
     parser.add_argument('--tandems', nargs='*', default=[],
                         help='Per-sample tandem cluster TSV files (optional)')
     parser.add_argument('--output', required=True,
@@ -424,6 +568,10 @@ def main():
     print(f"Loading BED files from {len(args.beds)} files...")
     beds_by_coord = load_beds(args.beds)
     print(f"  Loaded {len(beds_by_coord)} BED records")
+
+    print(f"Loading GTF files from {len(args.gtfs)} files...")
+    cds_by_sample_gene = load_gtf_cds(args.gtfs)
+    print(f"  Loaded CDS for {len(cds_by_sample_gene)} (sample, gene) pairs")
 
     tandems = {}
     if args.tandems:
@@ -457,7 +605,7 @@ def main():
         row_indices = ortholog_groups[oid]
         result = split_group_with_recovery(
             oid, row_indices, matrix_rows, fps_by_coord, fps_by_sample_gene,
-            beds_by_coord, tandems, args.codon_tolerance)
+            beds_by_coord, tandems, cds_by_sample_gene, args.codon_tolerance)
 
         if result is None:
             # No split — keep original rows
