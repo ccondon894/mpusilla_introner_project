@@ -47,6 +47,8 @@ snakemake -n --configfile config/config.yaml
 - `PRD.md` - Full project requirements document
 - `progress.txt` - Implementation progress tracker
 - `config/config.yaml` - All configurable parameters
+- `docs/insertion_site_verification.md` - Codon-level introner verification
+  pipeline (sharing_status, splitting, sequence comparison)
 
 ## Original Data Sources
 
