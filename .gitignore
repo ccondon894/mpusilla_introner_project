@@ -9,7 +9,8 @@ resources/
 # Conda environments and external tools
 # ============================================================
 workflow/envs/
-workflow/tools/
+workflow/tools/*
+!workflow/tools/introner-caller
 
 # ============================================================
 # Temporary and scratch files
