@@ -21,7 +21,7 @@ region) are NOT split — they represent meaningful biology (independent
 insertions at the same approximate locus).
 
 Reads:
-  --matrix:       Verified genotype matrix (with sharing_status column)
+  --matrix:       Verified genotype matrix (with within_group_status column)
   --fingerprints: Per-sample fingerprint TSV files
   --beds:         Per-sample BED files (for coordinate/splice/orientation lookup)
   --tandems:      Per-sample tandem cluster TSV files (optional, for flagging)
@@ -39,43 +39,111 @@ from collections import Counter, defaultdict
 
 GROUP2_SAMPLES = {'RCC1749', 'RCC3052'}
 CODON_TOLERANCE = 3
+AA_CONTEXT_WINDOW_LEN = 6
+AA_CONTEXT_MISMATCH_TOLERANCE = 1
 FLANK_LENGTH = 100  # used to back-compute BED-style coordinates from body span
 
 
 def get_locus_key(fp):
-    """Build a comparison key from a fingerprint dict."""
+    """Build a hybrid comparison key from a fingerprint dict.
+
+    Returns a ('hybrid', aa_ctx_or_none, legacy_key_or_none) tuple.
+    Two hybrid keys match if EITHER their aa contexts match OR their
+    legacy codon/intron keys are compatible.
+    """
+    aa_ctx = fp.get('flanking_aa_context', '') or None
+
+    legacy_key = None
     loc = fp.get('location_type', '')
     if loc == 'cds':
         try:
-            return ('cds', int(fp['codon_number']),
-                    int(fp.get('codon_offset', 0)),
-                    int(fp.get('exon_number', 0)))
+            legacy_key = ('cds', int(fp['codon_number']),
+                          int(fp.get('codon_offset', 0)),
+                          int(fp.get('exon_number', 0)))
         except (ValueError, TypeError, KeyError):
-            return None
-    if loc == 'intron':
+            pass
+    elif loc == 'intron':
         try:
-            return ('intron', int(fp['intron_number']))
+            legacy_key = ('intron', int(fp['intron_number']))
         except (ValueError, TypeError, KeyError):
-            return None
-    return None
+            pass
+
+    if aa_ctx is None and legacy_key is None:
+        return None
+    return ('hybrid', aa_ctx, legacy_key)
 
 
-def keys_within_tolerance(k1, k2, codon_tolerance):
-    """Check whether two keys point to the same biological locus."""
-    if k1 is None or k2 is None:
+def aa_contexts_match(ctx1, ctx2,
+                       window_len=AA_CONTEXT_WINDOW_LEN,
+                       max_mismatches=AA_CONTEXT_MISMATCH_TOLERANCE):
+    """Check if two aa context strings match via sliding-window comparison.
+
+    See classify_sharing_status.aa_contexts_match for details.
+    """
+    if not ctx1 or not ctx2:
         return False
-    if k1[0] == k2[0]:
-        if k1[0] == 'intron':
-            return k1[1] == k2[1]
-        if k1[0] == 'cds':
-            return abs(k1[1] - k2[1]) <= codon_tolerance
-    cds_key = k1 if k1[0] == 'cds' else k2 if k2[0] == 'cds' else None
-    intron_key = k1 if k1[0] == 'intron' else k2 if k2[0] == 'intron' else None
+    if len(ctx1) < window_len or len(ctx2) < window_len:
+        n = min(len(ctx1), len(ctx2))
+        mm = sum(1 for i in range(n) if ctx1[i] != ctx2[i])
+        return mm <= max_mismatches
+
+    for i in range(len(ctx1) - window_len + 1):
+        w1 = ctx1[i:i + window_len]
+        if w1.count('-') > max_mismatches:
+            continue
+        for j in range(len(ctx2) - window_len + 1):
+            w2 = ctx2[j:j + window_len]
+            if w2.count('-') > max_mismatches:
+                continue
+            mm = sum(1 for a, b in zip(w1, w2) if a != b)
+            if mm <= max_mismatches:
+                return True
+    return False
+
+
+def _legacy_keys_match(lk1, lk2, codon_tolerance):
+    """Check two legacy codon/intron keys for compatibility."""
+    if lk1 is None or lk2 is None:
+        return False
+    if lk1[0] == lk2[0]:
+        if lk1[0] == 'intron':
+            return lk1[1] == lk2[1]
+        if lk1[0] == 'cds':
+            return abs(lk1[1] - lk2[1]) <= codon_tolerance
+    cds_key = lk1 if lk1[0] == 'cds' else lk2 if lk2[0] == 'cds' else None
+    intron_key = lk1 if lk1[0] == 'intron' else lk2 if lk2[0] == 'intron' else None
     if cds_key is not None and intron_key is not None:
         exon_num = cds_key[3]
         intron_num = intron_key[1]
         return intron_num == exon_num or intron_num == exon_num - 1
     return False
+
+
+def keys_within_tolerance(k1, k2, codon_tolerance,
+                            aa_mismatch_tolerance=AA_CONTEXT_MISMATCH_TOLERANCE):
+    """Check whether two hybrid locus keys point to the same biological locus.
+
+    Each key is a ('hybrid', aa_ctx, legacy_key) tuple. Two keys match if
+    either the aa contexts match via sliding window OR the legacy codon/
+    intron keys are compatible.
+    """
+    if k1 is None or k2 is None:
+        return False
+
+    # Handle legacy direct keys if any sneak through
+    if k1[0] != 'hybrid' or k2[0] != 'hybrid':
+        return _legacy_keys_match(k1, k2, codon_tolerance)
+
+    _, aa1, legacy1 = k1
+    _, aa2, legacy2 = k2
+
+    # Try aa context match first
+    if aa1 and aa2:
+        if aa_contexts_match(aa1, aa2, max_mismatches=aa_mismatch_tolerance):
+            return True
+
+    # Fall back to legacy key match
+    return _legacy_keys_match(legacy1, legacy2, codon_tolerance)
 
 
 def cluster_keys(keys, codon_tolerance):
@@ -284,16 +352,41 @@ def find_matching_fingerprint(sample_gene_fps, target_key, codon_tolerance,
 
 
 def get_consensus_key_and_gene(cluster_indices, keys, members):
-    """Get the most common (locus_key, gene_id) for a cluster."""
-    cluster_keys = [keys[i] for i in cluster_indices]
-    cluster_genes = [members[i].get('gene_id', '') for i in cluster_indices]
+    """Get the consensus key, gene_id, and a legacy location key for a cluster.
+
+    Returns:
+        consensus_key: hybrid key for matching via keys_within_tolerance
+        consensus_gene: most common gene_id
+        fallback_location_key: the legacy codon/intron part of the consensus
+            hybrid key, used for coordinate lookup in absent samples (since
+            aa_ctx doesn't directly map to genomic positions).
+    """
+    cluster_keys = [keys[i] for i in cluster_indices if keys[i] is not None]
+    cluster_members = [members[i] for i in cluster_indices]
+    cluster_genes = [m.get('gene_id', '') for m in cluster_members]
+
     if not cluster_keys:
-        return None, ''
+        return None, '', None
+
+    # Hybrid keys have the form ('hybrid', aa_ctx, legacy_key). Pick the most
+    # common one for the consensus.
     key_counts = Counter(cluster_keys)
     gene_counts = Counter(g for g in cluster_genes if g)
     consensus_key = key_counts.most_common(1)[0][0]
     consensus_gene = gene_counts.most_common(1)[0][0] if gene_counts else ''
-    return consensus_key, consensus_gene
+
+    # Extract the legacy part of the consensus key, or fall back to
+    # searching for any member with a legacy key.
+    fallback_key = None
+    if consensus_key and consensus_key[0] == 'hybrid' and consensus_key[2] is not None:
+        fallback_key = consensus_key[2]
+    else:
+        for k in cluster_keys:
+            if k and k[0] == 'hybrid' and k[2] is not None:
+                fallback_key = k[2]
+                break
+
+    return consensus_key, consensus_gene, fallback_key
 
 
 def build_recovered_row(template_row, bed_row, fp_row, presence='1'):
@@ -416,14 +509,17 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
         for ki in cluster:
             member_to_cluster[typed[ki]['idx']] = ci
 
-    # Step 4: For each cluster, get consensus locus key and gene
+    # Step 4: For each cluster, get consensus locus key, gene, and fallback
+    # legacy key (used for coordinate lookup in absent samples, since the
+    # aa_ctx key doesn't map directly to genomic positions).
     sub_consensuses = []
     for ci, cluster in enumerate(clusters):
-        ck, cgene = get_consensus_key_and_gene(cluster, keys, typed)
+        ck, cgene, fallback = get_consensus_key_and_gene(cluster, keys, typed)
         sub_consensuses.append({
             'cluster_idx': ci,
             'key': ck,
             'gene': cgene,
+            'fallback_key': fallback,
         })
 
     # Step 5: Get all samples that were in the original group
@@ -470,6 +566,7 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
     for ci, consensus in enumerate(sub_consensuses):
         ckey = consensus['key']
         cgene = consensus['gene']
+        fallback_key = consensus.get('fallback_key')
 
         # Check if any presence=1 row in this cluster has a tandem flag
         for row in sub_group_rows[ci]:
@@ -512,15 +609,17 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
             # No recovery possible — mark as absent at this sub-locus.
             # Inherit original presence value: if it was 3 (missing), keep 3.
             # For presence=2, look up the consensus locus in this sample's
-            # GTF to record where the introner WOULD have been.
+            # GTF to record where the introner WOULD have been. Uses the
+            # fallback legacy key (codon/intron) since locate_consensus_in_gtf
+            # needs a codon/intron position, not an aa context string.
             original_presence = template['presence']
             if original_presence == '3':
                 new_row = build_absent_row(template, presence='3')
             else:
                 locus_coords = None
-                if cgene:
+                if cgene and fallback_key is not None:
                     locus_coords = locate_consensus_in_gtf(
-                        sample, cgene, ckey, cds_by_sample_gene)
+                        sample, cgene, fallback_key, cds_by_sample_gene)
                 new_row = build_absent_row(
                     template, presence='2',
                     locus_coords=locus_coords,
@@ -542,7 +641,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Split over-merged ortholog groups with lost introner recovery')
     parser.add_argument('--matrix', required=True,
-                        help='Verified genotype matrix with sharing_status column')
+                        help='Verified genotype matrix with within_group_status column')
     parser.add_argument('--fingerprints', required=True, nargs='+',
                         help='Per-sample fingerprint TSV files')
     parser.add_argument('--beds', required=True, nargs='+',

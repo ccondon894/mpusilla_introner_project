@@ -485,14 +485,19 @@ rule classify_sharing_status:
     Classify sharing status for introner ortholog groups.
 
     Compares codon-level insertion fingerprints within each ortholog group
-    to distinguish ancestrally shared introners from independent insertions
-    at the same genomic locus. Adds a 'sharing_status' column:
-      - ancestral:            same codon position + same family across groups
-      - independent:          different codon position or different family
-      - ambiguous:            small positional difference, same family
-      - same_site_diff_family: exact same position but different families
-      - consistent:           within-group only, fingerprints agree
-      - uncertain:            insufficient fingerprint data
+    to produce two independent classifications:
+
+    within_group_status (consistency within each clade):
+      - consistent:  fingerprints agree within each clade
+      - discordant:  at least one clade has members at multiple sites
+      - uncertain:   insufficient fingerprint data
+      - singleton:   only 1 presence=1 member in the group
+
+    cross_group_status (G1 vs G2 ancestry):
+      - ancestral:    same insertion site (aa-context match) + same family
+      - independent:  different site, different family, or legacy-only match
+      - uncertain:    insufficient data for cross-group comparison
+      - NA:           no cross-group members
     """
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.oriented.tsv",
@@ -599,20 +604,17 @@ rule reclassify_after_split:
 
 rule compare_introner_sequences:
     """
-    Compare introner body sequences within ortholog groups to refine sharing status.
+    Refine within_group_status and cross_group_status using body sequence identity.
 
     Extracts introner body sequences from indexed genome FASTAs and computes
-    pairwise sequence identity. Combines with codon-level sharing_status from
-    classify_sharing_status to produce a refined classification using two
-    thresholds:
-      - within-group identity (default 0.80): catches paralog/mismapping
-        issues in within-group ortholog groups
-      - cross-group identity (default 0.60): accommodates substantial
-        Group1↔Group2 divergence while still distinguishing ancestral
-        introners from independent insertions
+    pairwise identity. Overwrites the codon-level status columns with refined
+    values using two thresholds:
+      - within-group identity (default 0.80): resolves uncertain intergenic
+        groups to consistent (if same family + high identity), flags low_identity
+      - cross-group identity (default 0.60): resolves uncertain cross-group
+        cases to likely_ancestral/likely_independent
 
-    Adds columns: cross_group_identity, within_group_identity,
-    refined_sharing_status. All codon-level results are preserved.
+    Adds audit columns: within_group_identity, cross_group_identity.
     """
     input:
         verified_matrix = GENOTYPING_DIR / "genotype_matrix.split_verified.tsv",
@@ -645,10 +647,13 @@ rule annotate_missing_data:
     Annotate missing gene and family data in the genotype matrix.
 
     Strategy:
-    1. Gene annotation (ALL rows): Use bedtools overlap to find genes
+    1. Drop ortholog groups with within_group_status of 'discordant' or
+       'uncertain' (unusable for pi/dxy calculations)
+
+    2. Gene annotation (ALL rows): Use bedtools overlap to find genes
        at each introner's genomic coordinates (works for all scenarios)
 
-    2. Family annotation (Scenario 1 only): Use sequence similarity
+    3. Family annotation (Scenario 1 only): Use sequence similarity
        to match against reference introner families (presence=1 only)
 
     Output: Fully annotated genotype matrix ready for downstream analysis

@@ -30,6 +30,7 @@ import sys
 from collections import defaultdict
 
 import pysam
+from Bio.Seq import Seq
 
 
 FLANK_LENGTH = 100
@@ -40,6 +41,14 @@ SPLICE_SEARCH_WINDOW = 20
 # handles cases where miniprot annotated different exon lengths in different
 # samples but the introner is at the same biological intron-exon junction.
 BOUNDARY_CODON_TOLERANCE = 3
+
+# Number of amino acids on each side of the insertion site to include in
+# the flanking context fingerprint. We extract a larger window (5 on each
+# side = 10 aa total) so the comparison can handle small shifts in the
+# computed insertion position (±1-2 codons from splice site detection
+# variability). The comparison uses a sliding 6-mer match within this
+# larger window.
+FLANKING_AA_N = 5
 
 
 def parse_gtf_cds(gtf_path):
@@ -80,6 +89,133 @@ def parse_gtf_cds(gtf_path):
                 })
 
     return cds_by_gene
+
+
+class GeneContext:
+    """Precomputed CDS and protein data for a single gene.
+
+    Builds the concatenated CDS sequence (across all exons in transcript
+    order) and the translated amino acid sequence. Provides helpers for
+    extracting the flanking amino acid context around an insertion site,
+    which is the biologically-meaningful locus identifier that's invariant
+    to miniprot exon boundary annotation differences.
+    """
+
+    def __init__(self, cds_exons, genome):
+        """Build the CDS and protein sequence from the given exon list.
+
+        Args:
+            cds_exons: list of dicts with contig, start, end, strand (all on
+                the same contig and strand)
+            genome: open pysam.FastaFile
+        """
+        self.contig = cds_exons[0]['contig']
+        self.strand = cds_exons[0]['strand']
+
+        if self.strand == '+':
+            self.sorted_exons = sorted(cds_exons, key=lambda x: x['start'])
+        else:
+            self.sorted_exons = sorted(cds_exons, key=lambda x: x['start'],
+                                        reverse=True)
+
+        # Build the concatenated CDS sequence in transcript direction.
+        # Track cumulative CDS length before each exon so we can locate
+        # intron splice sites in the CDS/protein coordinate system.
+        cds_parts = []
+        self.exon_cum_lengths = [0]  # cum[i] = cum CDS length before exon i
+        for exon in self.sorted_exons:
+            try:
+                # GTF is 1-based inclusive; pysam.fetch is 0-based half-open
+                exon_seq = genome.fetch(
+                    self.contig, exon['start'] - 1, exon['end']).upper()
+            except (ValueError, KeyError):
+                self.cds_seq = None
+                self.aa_seq = None
+                return
+            if self.strand == '-':
+                exon_seq = reverse_complement(exon_seq)
+            cds_parts.append(exon_seq)
+            self.exon_cum_lengths.append(
+                self.exon_cum_lengths[-1] + len(exon_seq))
+
+        self.cds_seq = ''.join(cds_parts)
+
+        # Translate the CDS. Trim any trailing partial codon since the CDS
+        # may not be a multiple of 3 (happens with miniprot annotations that
+        # don't align perfectly to the reference protein).
+        trimmed = self.cds_seq[:len(self.cds_seq) - (len(self.cds_seq) % 3)]
+        try:
+            self.aa_seq = str(Seq(trimmed).translate())
+        except Exception:
+            self.aa_seq = None
+
+    def get_flanking_context(self, location_type, cds_position=None,
+                              intron_number=None, n_flank=FLANKING_AA_N):
+        """Extract n_flank amino acids on each side of the insertion site.
+
+        Returns a 2*n_flank amino acid string representing the flanking
+        context of the insertion. The comparison function (see
+        classify_sharing_status.py) uses a sliding-window match on this
+        context, so extracting extra flank aa gives robustness to small
+        shifts in the computed insertion position (±1-2 codons) caused
+        by splice site detection variability across samples.
+
+        For in-CDS insertions (location_type='cds'):
+            codon_idx = cds_position // 3 (the codon containing the last
+            exonic nucleotide before the insertion)
+
+        For in-intron insertions (location_type='intron'):
+            codon_idx = (cum_cds_length_at_end_of_upstream_exon - 1) // 3
+            (the codon at the splice site; may be a split codon for phase
+            1/2 introns, but it's still translatable from the full CDS)
+
+        Insufficient context at the gene edges is padded with '-'.
+        """
+        if self.aa_seq is None or not self.aa_seq:
+            return None
+
+        if location_type == 'cds':
+            if cds_position is None:
+                return None
+            codon_idx = cds_position // 3
+        elif location_type == 'intron':
+            if intron_number is None:
+                return None
+            if intron_number < 1 or intron_number >= len(self.exon_cum_lengths):
+                return None
+            cum = self.exon_cum_lengths[intron_number]
+            if cum == 0:
+                return None
+            codon_idx = (cum - 1) // 3
+        else:
+            return None
+
+        # Extract a window of 2*n_flank amino acids centered on the
+        # "insertion boundary" (between codon_idx and codon_idx+1).
+        # - Upstream n_flank codons end at codon_idx inclusive
+        # - Downstream n_flank codons start at codon_idx+1
+        up_start = codon_idx - n_flank + 1
+        up_end = codon_idx + 1
+        dn_start = codon_idx + 1
+        dn_end = codon_idx + 1 + n_flank
+
+        # Pad left if needed
+        left_pad = '-' * max(0, -up_start)
+        real_up_start = max(0, up_start)
+
+        # Pad right if needed
+        right_pad = '-' * max(0, dn_end - len(self.aa_seq))
+        real_dn_end = min(len(self.aa_seq), dn_end)
+
+        up = self.aa_seq[real_up_start:up_end] if real_up_start < up_end else ''
+        dn = self.aa_seq[dn_start:real_dn_end] if dn_start < real_dn_end else ''
+
+        ctx = left_pad + up + dn + right_pad
+        # Ensure exact length
+        if len(ctx) != 2 * n_flank:
+            # Shouldn't happen but handle defensively
+            ctx = ctx[:2 * n_flank].ljust(2 * n_flank, '-')
+        return ctx
 
 
 def parse_splice_offset(splice_str):
@@ -242,6 +378,11 @@ def main():
 
     genome = pysam.FastaFile(args.genome)
 
+    # Cache of GeneContext objects, keyed by (gene_id, contig). Building
+    # these is expensive (requires genome fetch + translation), and many
+    # introners share the same gene.
+    gene_contexts = {}
+
     # Track statistics
     stats = defaultdict(int)
 
@@ -278,6 +419,7 @@ def main():
                 'codon_offset': '',
                 'exon_number': '',
                 'intron_number': '',
+                'flanking_aa_context': '',
                 'confidence': '',
             }
 
@@ -382,6 +524,25 @@ def main():
                 result['intron_number'] = exon_or_intron
                 stats['intron_success'] += 1
 
+            # --- Extract flanking amino acid context ---
+            gc_key = (gene_info, contig)
+            if gc_key not in gene_contexts:
+                gene_contexts[gc_key] = GeneContext(cds_on_contig, genome)
+            gene_context = gene_contexts[gc_key]
+
+            if location_type == 'cds':
+                aa_context = gene_context.get_flanking_context(
+                    'cds', cds_position=cds_pos)
+            else:  # intron
+                aa_context = gene_context.get_flanking_context(
+                    'intron', intron_number=exon_or_intron)
+
+            if aa_context:
+                result['flanking_aa_context'] = aa_context
+                stats['aa_context_success'] += 1
+            else:
+                stats['aa_context_failed'] += 1
+
             result['confidence'] = 'high'
             stats['success'] += 1
             results.append(result)
@@ -395,6 +556,9 @@ def main():
           f"({100 * stats['success'] / max(1, stats['total']):.1f}%)")
     print(f"    in CDS exon:      {stats['cds_success']}")
     print(f"    in intron:        {stats['intron_success']}")
+    print(f"    with aa context:  {stats['aa_context_success']}")
+    if stats['aa_context_failed']:
+        print(f"    aa context failed:{stats['aa_context_failed']}")
     print(f"  No gene annotation: {stats['no_gene']}")
     print(f"  Gene not in GTF:    {stats['gene_not_in_gtf']}")
     print(f"  No CDS on contig:   {stats['no_cds_on_contig']}")
@@ -409,7 +573,8 @@ def main():
     fieldnames = ['sample', 'introner_id', 'contig', 'start', 'end', 'family',
                   'gene_id', 'strand', 'insertion_pos', 'location_type',
                   'cds_position', 'codon_number', 'codon_offset',
-                  'exon_number', 'intron_number', 'confidence']
+                  'exon_number', 'intron_number', 'flanking_aa_context',
+                  'confidence']
 
     with open(args.output, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t')

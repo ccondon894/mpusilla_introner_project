@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
 """
-Compare introner body sequences within ortholog groups to refine sharing status.
+Compare introner body sequences within ortholog groups to refine classification.
 
-For each ortholog group with ≥2 presence=1 members, extracts introner body
+For each ortholog group with >=2 presence=1 members, extracts introner body
 sequences from indexed genome FASTAs, computes pairwise sequence identity,
-and combines with the codon-level sharing_status to produce a refined
-classification.
+and refines the codon-level within_group_status and cross_group_status.
 
-All codon-level results are preserved. This script adds:
-  - cross_group_identity:    median G1-vs-G2 pairwise identity
-  - within_group_identity:   median within-group pairwise identity
-  - refined_sharing_status:  final verdict combining both evidence types
+Key refinements:
+  - Resolves 'uncertain' within-group groups (mostly intergenic) to
+    'consistent' when body identity >= threshold AND same family
+  - Resolves 'uncertain' cross-group cases to 'likely_ancestral' or
+    'likely_independent' based on body identity
+  - Flags 'consistent' groups with low within-group identity
+  - Flags 'ancestral' groups with low cross-group identity
+
+Overwrites within_group_status and cross_group_status with refined values.
+Adds within_group_identity and cross_group_identity as audit columns.
 """
 
 import argparse
 import csv
 import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from statistics import median
 
 import pysam
@@ -85,8 +90,6 @@ def compute_identity_from_alignment(alignment):
     """Compute sequence identity from a PairwiseAligner alignment.
 
     Identity = identities / (identities + mismatches + gaps).
-    Uses alignment.counts() which directly tracks matches, mismatches,
-    and gaps across the entire alignment.
     """
     counts = alignment.counts()
     total = counts.identities + counts.mismatches + counts.gaps
@@ -128,15 +131,8 @@ def pick_representative(members, preferred):
 def compute_group_identities(members, genomes, aligner, flanking):
     """Compute within-group and cross-group identity for an ortholog group.
 
-    Args:
-        members: list of dicts with sample, contig, start, end, group keys
-        genomes: dict of pysam.FastaFile handles
-        aligner: PairwiseAligner instance
-        flanking: flanking length to trim
-
-    Returns:
-        (within_group_identity, cross_group_identity, n_extracted)
-        where identities are floats or None if not computable.
+    Returns (within_group_identity, cross_group_identity, n_extracted)
+    where identities are floats or None if not computable.
     """
     # Extract sequences for all members
     seqs = []
@@ -144,7 +140,8 @@ def compute_group_identities(members, genomes, aligner, flanking):
         seq = extract_body(genomes, m['sample'], m['contig'],
                            m['start'], m['end'], flanking)
         if seq:
-            seqs.append({'sample': m['sample'], 'group': m['group'], 'seq': seq})
+            seqs.append({'sample': m['sample'], 'group': m['group'],
+                         'seq': seq, 'family': m.get('family', '')})
 
     if len(seqs) < 2:
         return None, None, len(seqs)
@@ -160,7 +157,6 @@ def compute_group_identities(members, genomes, aligner, flanking):
         g1_rep = pick_representative(g1_seqs, G1_PREFERRED)
         g2_rep = pick_representative(g2_seqs, G2_PREFERRED)
 
-        # Always compute representative pair
         ident, _ = pairwise_identity(g1_rep['seq'], g2_rep['seq'], aligner)
         cross_identities.append(ident)
 
@@ -168,8 +164,9 @@ def compute_group_identities(members, genomes, aligner, flanking):
         if len(g1_seqs) <= 5 and len(g2_seqs) <= 2:
             for s1 in g1_seqs:
                 for s2 in g2_seqs:
-                    if s1['sample'] == g1_rep['sample'] and s2['sample'] == g2_rep['sample']:
-                        continue  # already computed
+                    if (s1['sample'] == g1_rep['sample'] and
+                            s2['sample'] == g2_rep['sample']):
+                        continue
                     ident, _ = pairwise_identity(s1['seq'], s2['seq'], aligner)
                     cross_identities.append(ident)
 
@@ -187,85 +184,103 @@ def compute_group_identities(members, genomes, aligner, flanking):
     return within_identity, cross_identity, len(seqs)
 
 
-def refine_status(sharing_status, within_identity, cross_identity,
-                  within_threshold, cross_threshold):
-    """Combine codon-level sharing_status with sequence identity evidence.
+def refine_within_group(within_status, within_identity, within_threshold,
+                        families_consistent):
+    """Refine within_group_status using sequence identity.
 
-    Conservative approach: codon evidence is primary for ancestral vs
-    independent calls. Sequence identity is only the deciding factor for
-    'uncertain' groups (no codon data, mostly intergenic loci) and as a
-    secondary flag for outlier cases.
-
-    Rationale: empirically, cross-group sequence identity correlates more
-    with introner family relatedness than with shared insertion ancestry.
-    A pair of family-2 introners will share ~60-80% identity whether or
-    not they came from the same ancestral insertion. Codon position is
-    the more direct evidence for the insertion event itself.
-
-    Two thresholds:
-      - within_threshold: catches paralog/mismapping in within-group
-        ortholog groups where high identity is expected
-      - cross_threshold: used only for uncertain/intergenic loci where
-        no codon evidence is available
+    Args:
+        within_status: codon-level within_group_status
+        within_identity: float or None
+        within_threshold: identity threshold (e.g. 0.80)
+        families_consistent: bool, True if all members share the same family
     """
-    # Within-group ortholog groups
-    if sharing_status == 'consistent':
+    if within_status == 'singleton':
+        return 'singleton'
+
+    if within_status == 'discordant':
+        return 'discordant'
+
+    if within_status == 'consistent':
         if within_identity is None:
             return 'consistent'
         if within_identity >= within_threshold:
             return 'consistent'
-        return 'consistent_low_identity'
+        return 'low_identity'
 
-    if sharing_status == 'within_group_discordant':
-        return 'within_group_discordant'
+    if within_status == 'uncertain':
+        # Resolve using sequence identity + family check
+        if within_identity is None:
+            return 'uncertain'
+        if within_identity >= within_threshold and families_consistent:
+            return 'consistent'
+        if within_identity < within_threshold:
+            return 'low_identity'
+        # High identity but different families — keep uncertain
+        return 'uncertain'
 
-    # Cross-group ortholog groups: codon evidence is primary
-    if sharing_status == 'ancestral':
-        # Exact codon match + same family. Codon evidence is sufficient.
-        # Flag if sequence identity is unusually low (potential convergent).
+    return within_status
+
+
+def refine_cross_group(cross_status, cross_identity, cross_threshold):
+    """Refine cross_group_status using sequence identity.
+
+    Args:
+        cross_status: codon-level cross_group_status
+        cross_identity: float or None
+        cross_threshold: identity threshold (e.g. 0.60)
+    """
+    if cross_status == 'NA':
+        return 'NA'
+
+    if cross_status == 'ancestral':
         if cross_identity is not None and cross_identity < cross_threshold:
             return 'ancestral_low_identity'
         return 'ancestral'
 
-    if sharing_status == 'same_site_diff_family':
-        # Exact codon match but different families. Preserve as flagged
-        # for review regardless of sequence identity.
-        return 'same_site_diff_family'
-
-    if sharing_status == 'ambiguous':
-        # Close codon position (within tolerance), same family. Cannot
-        # make a confident call from codon data alone, and sequence
-        # identity is not a reliable discriminator at this scale.
-        return 'ambiguous'
-
-    if sharing_status == 'ambiguous_diff_family':
-        return 'ambiguous_diff_family'
-
-    if sharing_status == 'independent':
-        # Codon evidence is definitive: different positions or families.
+    if cross_status == 'independent':
         return 'independent'
 
-    if sharing_status == 'uncertain':
-        # No codon data available (mostly intergenic loci).
-        # Sequence identity is the only available evidence here.
+    if cross_status == 'uncertain':
         if cross_identity is None:
             return 'uncertain'
         if cross_identity >= cross_threshold:
             return 'likely_ancestral'
         return 'likely_independent'
 
-    return sharing_status
+    return cross_status
+
+
+def check_family_consistency(members):
+    """Check if all presence=1 members within each clade share the same family.
+
+    Returns True if families are consistent within each clade (ignoring
+    empty/missing families). Returns True for single-member clades.
+    """
+    by_clade = defaultdict(list)
+    for m in members:
+        fam = m.get('family', '')
+        if fam:
+            by_clade[m['group']].append(fam)
+
+    for clade, families in by_clade.items():
+        if len(families) < 2:
+            continue
+        if len(set(families)) > 1:
+            return False
+
+    return True
 
 
 def main():
     parser = argparse.ArgumentParser(
         description='Compare introner sequences within ortholog groups')
     parser.add_argument('--matrix', required=True,
-                        help='Verified genotype matrix with sharing_status column')
+                        help='Verified genotype matrix with within_group_status '
+                             'and cross_group_status columns')
     parser.add_argument('--genome-dir', required=True,
                         help='Directory with indexed genome FASTAs')
     parser.add_argument('--output', required=True,
-                        help='Output matrix with refined sharing status')
+                        help='Output matrix with refined status columns')
     parser.add_argument('--summary', default=None,
                         help='Optional per-group summary TSV')
     parser.add_argument('--flanking-length', type=int, default=100,
@@ -274,8 +289,6 @@ def main():
                         help='Identity threshold for within-group comparisons (default: 0.80)')
     parser.add_argument('--cross-group-identity-threshold', type=float, default=0.60,
                         help='Identity threshold for cross-group comparisons (default: 0.60)')
-    parser.add_argument('--coverage-threshold', type=float, default=0.80,
-                        help='Minimum alignment coverage (default: 0.80)')
     args = parser.parse_args()
 
     # Read matrix and group by ortholog_id
@@ -303,15 +316,21 @@ def main():
     aligner = make_aligner()
 
     # Process each ortholog group
-    status_counts = defaultdict(int)
+    within_counts = defaultdict(int)
+    cross_counts = defaultdict(int)
+    within_transitions = defaultdict(int)
+    cross_transitions = defaultdict(int)
     group_summaries = []
     groups_processed = 0
 
     for oid, row_indices in ortholog_groups.items():
+        # Read codon-level statuses
+        first_row = matrix_rows[row_indices[0]]
+        within_status = first_row.get('within_group_status', '')
+        cross_status = first_row.get('cross_group_status', '')
+
         # Collect presence=1 members
         members = []
-        sharing_status = matrix_rows[row_indices[0]].get('sharing_status', '')
-
         for idx in row_indices:
             row = matrix_rows[idx]
             if row['presence'] != '1':
@@ -335,22 +354,36 @@ def main():
             within_ident, cross_ident, n_extracted = compute_group_identities(
                 members, genomes, aligner, args.flanking_length)
 
-        # Refine status
-        refined = refine_status(
-            sharing_status, within_ident, cross_ident,
-            args.within_group_identity_threshold,
+        # Check family consistency for within-group resolution
+        families_consistent = check_family_consistency(members)
+
+        # Refine both statuses
+        refined_within = refine_within_group(
+            within_status, within_ident,
+            args.within_group_identity_threshold, families_consistent)
+        refined_cross = refine_cross_group(
+            cross_status, cross_ident,
             args.cross_group_identity_threshold)
-        status_counts[refined] += 1
+
+        within_counts[refined_within] += 1
+        cross_counts[refined_cross] += 1
+
+        # Track transitions
+        if within_status != refined_within:
+            within_transitions[f"{within_status} -> {refined_within}"] += 1
+        if cross_status != refined_cross:
+            cross_transitions[f"{cross_status} -> {refined_cross}"] += 1
 
         # Format identity values for output
         cross_str = f"{cross_ident:.4f}" if cross_ident is not None else ''
         within_str = f"{within_ident:.4f}" if within_ident is not None else ''
 
-        # Apply to all rows in the group
+        # Apply refined statuses to all rows in the group
         for idx in row_indices:
-            matrix_rows[idx]['cross_group_identity'] = cross_str
+            matrix_rows[idx]['within_group_status'] = refined_within
+            matrix_rows[idx]['cross_group_status'] = refined_cross
             matrix_rows[idx]['within_group_identity'] = within_str
-            matrix_rows[idx]['refined_sharing_status'] = refined
+            matrix_rows[idx]['cross_group_identity'] = cross_str
 
         # Summary record
         families = sorted(set(m['family'] for m in members if m['family']))
@@ -359,15 +392,14 @@ def main():
 
         group_summaries.append({
             'ortholog_id': oid,
-            'sharing_status': sharing_status,
-            'refined_sharing_status': refined,
+            'within_group_status': refined_within,
+            'cross_group_status': refined_cross,
             'n_present': len(members),
             'n_extracted': n_extracted,
             'cross_group_identity': cross_str,
             'within_group_identity': within_str,
             'families': ';'.join(families),
-            'g1_representative': g1_rep[0] if g1_rep else '',
-            'g2_representative': g2_rep[0] if g2_rep else '',
+            'families_consistent': str(families_consistent),
         })
 
         groups_processed += 1
@@ -379,16 +411,40 @@ def main():
         fa.close()
 
     # Print summary
-    print(f"\nRefined sharing status (within_threshold={args.within_group_identity_threshold}, "
-          f"cross_threshold={args.cross_group_identity_threshold}):")
-    for status, count in sorted(status_counts.items(), key=lambda x: -x[1]):
+    print(f"\nWithin-group status (refined, threshold={args.within_group_identity_threshold}):")
+    for status, count in sorted(within_counts.items(), key=lambda x: -x[1]):
         pct = 100 * count / max(1, len(ortholog_groups))
         print(f"  {status:30s}  {count:5d}  ({pct:.1f}%)")
+
+    print(f"\nCross-group status (refined, threshold={args.cross_group_identity_threshold}):")
+    for status, count in sorted(cross_counts.items(), key=lambda x: -x[1]):
+        pct = 100 * count / max(1, len(ortholog_groups))
+        print(f"  {status:30s}  {count:5d}  ({pct:.1f}%)")
+
     print(f"  {'TOTAL':30s}  {len(ortholog_groups):5d}")
 
+    if within_transitions:
+        print(f"\nWithin-group transitions:")
+        for t, count in sorted(within_transitions.items(), key=lambda x: -x[1]):
+            print(f"  {t:45s}  {count:5d}")
+
+    if cross_transitions:
+        print(f"\nCross-group transitions:")
+        for t, count in sorted(cross_transitions.items(), key=lambda x: -x[1]):
+            print(f"  {t:45s}  {count:5d}")
+
     # Write output matrix
-    out_fieldnames = fieldnames + ['cross_group_identity', 'within_group_identity',
-                                    'refined_sharing_status']
+    # Remove old columns if re-running, add new identity columns
+    out_fieldnames = [f for f in fieldnames
+                      if f not in ('cross_group_identity', 'within_group_identity',
+                                   'refined_sharing_status', 'sharing_status')]
+    # Ensure within_group_status and cross_group_status are present
+    if 'within_group_status' not in out_fieldnames:
+        out_fieldnames.append('within_group_status')
+    if 'cross_group_status' not in out_fieldnames:
+        out_fieldnames.append('cross_group_status')
+    out_fieldnames += ['within_group_identity', 'cross_group_identity']
+
     with open(args.output, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=out_fieldnames, delimiter='\t',
                                 extrasaction='ignore')
@@ -399,10 +455,10 @@ def main():
 
     # Write optional summary
     if args.summary:
-        summary_fields = ['ortholog_id', 'sharing_status', 'refined_sharing_status',
-                          'n_present', 'n_extracted', 'cross_group_identity',
-                          'within_group_identity', 'families',
-                          'g1_representative', 'g2_representative']
+        summary_fields = ['ortholog_id', 'within_group_status',
+                          'cross_group_status', 'n_present', 'n_extracted',
+                          'cross_group_identity', 'within_group_identity',
+                          'families', 'families_consistent']
         with open(args.summary, 'w', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=summary_fields, delimiter='\t')
             writer.writeheader()
