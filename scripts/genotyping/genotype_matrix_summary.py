@@ -2,7 +2,8 @@
 """
 Generate summary statistics for the final genotype matrix.
 
-Reports ortholog group counts, cross-group presence/absence patterns,
+Reports ortholog group counts, within- and cross-group classification
+breakdowns (from within_group_status / cross_group_status columns),
 gene occupancy, family frequency composition, and shared locus statistics.
 """
 
@@ -50,25 +51,29 @@ def main():
         if (g1_rows['presence'] == 1).all() and (g2_rows['presence'] == 1).all():
             fixed_shared.add(oid)
 
-    # Cross-group status
-    def cross_group_status(source_loci, target_df, target_samples):
-        """For each source locus, classify its status in the target group."""
-        n_present = 0
-        n_absent = 0
-        n_not_callable = 0
-        for oid in source_loci:
-            target_rows = target_df[target_df['ortholog_id'] == oid]
-            presences = set(target_rows['presence'])
-            if 1 in presences:
-                n_present += 1  # shared
-            elif 2 in presences:
-                n_absent += 1   # absent in at least one target sample
-            else:
-                n_not_callable += 1  # all target samples are 3
-        return n_present, n_absent, n_not_callable
+    # Classification breakdowns derived from the new status columns
+    # One classification per ortholog group (collapse duplicate rows)
+    group_status = df.drop_duplicates('ortholog_id').set_index('ortholog_id')
+    within_status_counts = Counter(group_status['within_group_status'].fillna(''))
+    cross_status_counts = Counter(group_status['cross_group_status'].fillna('NA'))
+    # Treat empty string as NA for cross_group_status (annotate step may
+    # replace literal 'NA' with empty)
+    if '' in cross_status_counts:
+        cross_status_counts['NA'] = cross_status_counts.pop('') + cross_status_counts.get('NA', 0)
 
-    g1_in_g2_present, g1_in_g2_absent, g1_in_g2_nocall = cross_group_status(g1_loci, g2_df, group2_set)
-    g2_in_g1_present, g2_in_g1_absent, g2_in_g1_nocall = cross_group_status(g2_loci, g1_df, group1_set)
+    # For within-group-only groups (cross_group_status == NA), split by
+    # which clade(s) have presence=1 members
+    na_groups = set(group_status[
+        group_status['cross_group_status'].fillna('NA').isin(['NA', ''])
+    ].index)
+    na_g1_only = len({oid for oid in na_groups
+                      if oid in g1_loci and oid not in g2_loci})
+    na_g2_only = len({oid for oid in na_groups
+                      if oid in g2_loci and oid not in g1_loci})
+    na_both_presence = len({oid for oid in na_groups
+                            if oid in g1_loci and oid in g2_loci})
+    na_neither = len({oid for oid in na_groups
+                      if oid not in g1_loci and oid not in g2_loci})
 
     # Gene occupancy (per group, using present introners)
     def gene_occupancy(loci, present_df, group_samples):
@@ -120,22 +125,62 @@ def main():
                 f"({100*len(fixed_shared)/len(all_loci):.1f}%)\n")
         f.write(f"\n")
 
-        # Section 3: Cross-group status
-        f.write("3. CROSS-GROUP STATUS\n")
+        # Section 3: Within-group classification status
+        f.write("3. WITHIN-GROUP STATUS\n")
         f.write("-" * 40 + "\n")
-        f.write(f"Group 1 loci ({len(g1_loci):,}) in Group 2:\n")
-        f.write(f"  Present (shared):    {g1_in_g2_present:,} ({100*g1_in_g2_present/len(g1_loci):.1f}%)\n")
-        f.write(f"  Absent:              {g1_in_g2_absent:,} ({100*g1_in_g2_absent/len(g1_loci):.1f}%)\n")
-        f.write(f"  Not callable:        {g1_in_g2_nocall:,} ({100*g1_in_g2_nocall/len(g1_loci):.1f}%)\n")
-        f.write(f"\n")
-        f.write(f"Group 2 loci ({len(g2_loci):,}) in Group 1:\n")
-        f.write(f"  Present (shared):    {g2_in_g1_present:,} ({100*g2_in_g1_present/len(g2_loci):.1f}%)\n")
-        f.write(f"  Absent:              {g2_in_g1_absent:,} ({100*g2_in_g1_absent/len(g2_loci):.1f}%)\n")
-        f.write(f"  Not callable:        {g2_in_g1_nocall:,} ({100*g2_in_g1_nocall/len(g2_loci):.1f}%)\n")
+        total_groups = len(all_loci)
+        within_order = ['consistent', 'singleton', 'low_identity',
+                        'discordant', 'uncertain']
+        for status in within_order:
+            count = within_status_counts.get(status, 0)
+            if count == 0 and status in ('discordant', 'uncertain'):
+                continue  # these are filtered out upstream; skip zeros
+            pct = 100 * count / total_groups if total_groups else 0
+            f.write(f"  {status:<22s}  {count:>7,d}  ({pct:5.1f}%)\n")
+        # Catch any unexpected values
+        for status, count in within_status_counts.items():
+            if status not in within_order:
+                pct = 100 * count / total_groups if total_groups else 0
+                f.write(f"  {status:<22s}  {count:>7,d}  ({pct:5.1f}%)\n")
+        f.write(f"  {'TOTAL':<22s}  {total_groups:>7,d}\n")
         f.write(f"\n")
 
-        # Section 4: Gene occupancy
-        f.write("4. GENE OCCUPANCY\n")
+        # Section 4: Cross-group classification (ancestral vs independent)
+        f.write("4. CROSS-GROUP STATUS (ancestral vs independent)\n")
+        f.write("-" * 40 + "\n")
+        na_count = cross_status_counts.get('NA', 0)
+        cross_group_total = total_groups - na_count
+        f.write(f"Cross-group classification "
+                f"(groups with both G1 and G2 members, n={cross_group_total:,}):\n")
+        cross_order = ['ancestral', 'likely_ancestral', 'ancestral_low_identity',
+                       'independent', 'likely_independent',
+                       'uncertain']
+        for status in cross_order:
+            count = cross_status_counts.get(status, 0)
+            if count == 0:
+                continue
+            pct = 100 * count / cross_group_total if cross_group_total else 0
+            f.write(f"  {status:<24s}  {count:>5,d}  ({pct:5.1f}%)\n")
+        # Catch any unexpected non-NA values
+        for status, count in cross_status_counts.items():
+            if status not in cross_order and status != 'NA':
+                pct = 100 * count / cross_group_total if cross_group_total else 0
+                f.write(f"  {status:<24s}  {count:>5,d}  ({pct:5.1f}%)\n")
+        f.write(f"\n")
+        f.write(f"Within-group-only groups (cross_group_status = NA): "
+                f"{na_count:,}\n")
+        f.write(f"  Present only in G1:   {na_g1_only:,}\n")
+        f.write(f"  Present only in G2:   {na_g2_only:,}\n")
+        if na_both_presence:
+            f.write(f"  Present in both*:     {na_both_presence:,}\n")
+            f.write(f"    * classification is NA despite presence in both\n"
+                    f"      clades; likely lacked fingerprints for comparison\n")
+        if na_neither:
+            f.write(f"  Present in neither:   {na_neither:,}\n")
+        f.write(f"\n")
+
+        # Section 5: Gene occupancy
+        f.write("5. GENE OCCUPANCY\n")
         f.write("-" * 40 + "\n")
         f.write(f"Note: gene annotations from validation step; may be unreliable.\n")
         f.write(f"Group 1: {g1_in_gene:,}/{g1_gene_total:,} "
@@ -144,8 +189,8 @@ def main():
                 f"({100*g2_in_gene/g2_gene_total:.1f}%) within annotated genes\n")
         f.write(f"\n")
 
-        # Section 5: Family frequency composition
-        f.write("5. FAMILY FREQUENCY COMPOSITION\n")
+        # Section 6: Family frequency composition
+        f.write("6. FAMILY FREQUENCY COMPOSITION\n")
         f.write("-" * 40 + "\n")
         all_families = sorted(set(g1_fam_counts.keys()) | set(g2_fam_counts.keys()))
         g1_fam_total = sum(g1_fam_counts.values())
