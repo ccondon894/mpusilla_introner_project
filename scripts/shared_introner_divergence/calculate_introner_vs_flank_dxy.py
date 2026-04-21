@@ -163,6 +163,9 @@ def calculate_metrics_for_loci(alignment_dir, classification, group1_set, group2
         results.append({
             'ortholog_id': oid,
             'category': locus_info['category'],
+            'cross_group_status': locus_info.get('cross_group_status', 'NA'),
+            'ancestry_class': locus_info.get('ancestry_class', 'unclassified'),
+            'within_group_status': locus_info.get('within_group_status', ''),
             'group1_present_count': locus_info['group1_present_count'],
             'group2_present_count': locus_info['group2_present_count'],
             'dxy_introner': dxy_introner,

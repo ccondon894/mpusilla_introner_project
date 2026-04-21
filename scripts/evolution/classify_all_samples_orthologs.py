@@ -28,65 +28,119 @@ def load_fasta_sequences(fasta_dir, flank_length):
                 fasta_dict[record.id] = str(record.seq)
     return fasta_dict
 
+ANCESTRAL_CROSS_GROUP = {
+    'ancestral', 'likely_ancestral', 'ancestral_low_identity',
+}
+
+
+def _cross_group_value(ortholog_df):
+    """Get the cross_group_status for this ortholog (first non-null row)."""
+    if 'cross_group_status' not in ortholog_df.columns:
+        return ''
+    vals = ortholog_df['cross_group_status'].dropna().unique()
+    if len(vals) == 0:
+        return ''
+    v = vals[0]
+    if pd.isna(v):
+        return ''
+    return str(v)
+
+
+def _within_group_value(ortholog_df):
+    """Get the within_group_status for this ortholog (first non-null row)."""
+    if 'within_group_status' not in ortholog_df.columns:
+        return ''
+    vals = ortholog_df['within_group_status'].dropna().unique()
+    if len(vals) == 0:
+        return ''
+    return str(vals[0])
+
+
 def classify_all_samples_orthologs(df, group1, group2):
     """
-    Classify ortholog groups by fixation patterns between Group1 and Group2
-    Returns fixation-based classification for group comparison analysis
+    Classify ortholog groups by fixation patterns between Group1 and Group2.
+
+    Applies ancestry-aware filtering:
+    - Drops any group where within_group_status == 'low_identity' (suspicious
+      ortholog grouping, likely paralog mismerge or partial deletion).
+    - For the group1_fixed_group2_fixed category, additionally requires
+      cross_group_status in ANCESTRAL_CROSS_GROUP so Dxy is computed only on
+      orthologs with evidence of shared ancestry (not convergent insertions
+      at the same locus).
     """
     classification = {}
-    
+    skipped_low_identity = 0
+    skipped_non_ancestral = 0
+
     # Get unique ortholog IDs
     ortholog_ids = df['ortholog_id'].unique()
-    
+
     for ortholog_id in ortholog_ids:
         # Filter rows for this ortholog
         ortholog_df = df[df['ortholog_id'] == ortholog_id]
-        
+
+        # Drop low_identity groups entirely (suspicious ortholog grouping)
+        within_status = _within_group_value(ortholog_df)
+        if within_status == 'low_identity':
+            skipped_low_identity += 1
+            continue
+
         # Get Group1 and Group2 samples
         g1_rows = ortholog_df[ortholog_df['sample'].isin(group1)]
         g2_rows = ortholog_df[ortholog_df['sample'].isin(group2)]
-        
+
         # Skip if no data for either group
         if g1_rows.empty or g2_rows.empty:
             continue
-            
+
         # Get presence status (1=present, 2=absent, 3=missing)
         g1_presence = g1_rows['presence'].to_list()
         g2_presence = g2_rows['presence'].to_list()
-        
+
         # Skip if any missing data (3) - we need complete data for fixation analysis
         if 3 in g1_presence or 3 in g2_presence:
             continue
-            
+
         # Skip if not all samples represented in each group
         if len(g1_presence) != len(group1) or len(g2_presence) != len(group2):
             continue
-            
+
         # Count present and absent in each group
         g1_present_count = g1_presence.count(1)
         g1_absent_count = g1_presence.count(2)
         g2_present_count = g2_presence.count(1)
         g2_absent_count = g2_presence.count(2)
-        
+
         # Determine fixation category based on strict fixation patterns
         category = None
-        
+
         if g1_present_count == len(group1) and g2_absent_count == len(group2):
-            # All Group1 present, all Group2 absent
             category = "group1_fixed_group2_absent"
         elif g1_absent_count == len(group1) and g2_present_count == len(group2):
-            # All Group1 absent, all Group2 present
             category = "group1_absent_group2_fixed"
         elif g1_present_count == len(group1) and g2_present_count == len(group2):
-            # All Group1 present, all Group2 present
             category = "group1_fixed_group2_fixed"
         else:
             # Skip cases that don't match strict fixation patterns
             continue
-            
+
+        # For fixed_fixed (both clades have the introner), require cross-group
+        # evidence of shared ancestry. Clade-specific categories don't have
+        # cross-group members so this filter doesn't apply to them.
+        cross_status = _cross_group_value(ortholog_df)
+        if category == "group1_fixed_group2_fixed":
+            if cross_status not in ANCESTRAL_CROSS_GROUP:
+                skipped_non_ancestral += 1
+                continue
+        else:
+            # Clade-specific: no cross-group comparison possible
+            cross_status = 'NA'
+
         # Store classification information
         classification[ortholog_id] = {
             "category": category,
+            "cross_group_status": cross_status,
+            "within_group_status": within_status,
             "group1_present_count": g1_present_count,
             "group1_absent_count": g1_absent_count,
             "group2_present_count": g2_present_count,
@@ -94,7 +148,9 @@ def classify_all_samples_orthologs(df, group1, group2):
             "group1_total": len(group1),
             "group2_total": len(group2)
         }
-    
+
+    print(f"  Skipped {skipped_low_identity} low_identity groups")
+    print(f"  Skipped {skipped_non_ancestral} non-ancestral fixed_fixed groups")
     return classification
 
 def prepare_all_samples_fasta_files(df, fasta_dict, classification, output_dir, group1, group2, flank_length):

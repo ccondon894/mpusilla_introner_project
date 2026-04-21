@@ -76,8 +76,17 @@ def site_overlaps_introner(chrom, pos, introner_index):
     return False
 
 
+ACCEPTED_WITHIN_STATUS = {'consistent', 'singleton'}
+
+
 def extract_unique_sample_sets(genotype_matrix_file, verbose=False):
-    """Extract all unique sample sets from the genotype matrix."""
+    """Extract unique sample sets from consistent/singleton Group1 loci.
+
+    Filters to ortholog groups where within_group_status is 'consistent'
+    or 'singleton' so the neutral reference only reflects trustworthy
+    ortholog calls. low_identity groups (likely paralog mismerges) are
+    excluded.
+    """
     if verbose:
         print(f"Loading genotype matrix from {genotype_matrix_file}")
 
@@ -87,9 +96,17 @@ def extract_unique_sample_sets(genotype_matrix_file, verbose=False):
     df_filtered = df[~df['sample'].isin(group2_samples)]
 
     sample_sets = set()
+    skipped_low_identity = 0
 
     # Only include truly polymorphic loci (both present and absent calls)
+    # AND with trustworthy within-group classification
     for ortholog_id, ortholog_data in df_filtered.groupby('ortholog_id'):
+        if 'within_group_status' in ortholog_data.columns:
+            within_vals = ortholog_data['within_group_status'].dropna().unique()
+            if len(within_vals) > 0 and str(within_vals[0]) not in ACCEPTED_WITHIN_STATUS:
+                skipped_low_identity += 1
+                continue
+
         presences = set(ortholog_data['presence'])
         if 1 not in presences or 2 not in presences:
             continue  # Skip monomorphic or not-callable-only loci
@@ -103,7 +120,9 @@ def extract_unique_sample_sets(genotype_matrix_file, verbose=False):
             sample_sets.add(format_sample_set(absent_samples))
 
     if verbose:
-        print(f"  Found {len(sample_sets)} unique sample sets with >= 2 samples (polymorphic loci only)")
+        print(f"  Skipped {skipped_low_identity} groups with low_identity within-group status")
+        print(f"  Found {len(sample_sets)} unique sample sets with >= 2 samples "
+              f"(consistent/singleton polymorphic loci only)")
 
     return sample_sets
 

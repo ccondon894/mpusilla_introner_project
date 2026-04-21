@@ -27,50 +27,67 @@ def load_fasta_sequences(fasta_dir, flank_length):
                 fasta_dict[record.id] = str(record.seq)
     return fasta_dict
 
+ACCEPTED_WITHIN_STATUS = {'consistent', 'singleton'}
+
+
 def classify_group1_orthologs(df, group1):
     """
-    Classify Group1 ortholog groups by allele frequency
-    Returns frequency-based classification for bottleneck model analysis
+    Classify Group1 ortholog groups by allele frequency.
+
+    Applies within-group classification filter: only groups where
+    within_group_status is in ACCEPTED_WITHIN_STATUS are considered. Drops
+    low_identity groups (suspicious ortholog grouping / partial deletions).
+    Singletons are kept because they are legitimate freq=1 Group1
+    polymorphisms — the downstream diversity computation handles the case
+    where pi(present) can't be computed from a single sequence.
     """
     classification = {}
-    
+    skipped_low_identity = 0
+
     # Get unique ortholog IDs
     ortholog_ids = df['ortholog_id'].unique()
-    
+
     for ortholog_id in ortholog_ids:
         # Filter rows for this ortholog
         ortholog_df = df[df['ortholog_id'] == ortholog_id]
-        
+
+        # Drop groups with suspect within-group classification
+        if 'within_group_status' in ortholog_df.columns:
+            within_vals = ortholog_df['within_group_status'].dropna().unique()
+            if len(within_vals) > 0 and str(within_vals[0]) not in ACCEPTED_WITHIN_STATUS:
+                skipped_low_identity += 1
+                continue
+
         # Get Group1 samples only
         g1_rows = ortholog_df[ortholog_df['sample'].isin(group1)]
-        
+
         # Skip if no Group1 data
         if g1_rows.empty:
             continue
-            
+
         # Get presence status (1=present, 2=absent, 3=missing)
         g1_presence = g1_rows['presence'].to_list()
-        
+
         # Skip if any missing data (3) - we need complete data for frequency analysis
         if 3 in g1_presence:
             continue
-            
+
         # Count present and absent
         present_count = g1_presence.count(1)
         absent_count = g1_presence.count(2)
         total_count = present_count + absent_count
-        
+
         # Skip if not all samples represented
         if total_count != len(group1):
             continue
-            
+
         # Skip monomorphic cases (all present or all absent) - no polymorphism to analyze
         if present_count == 0 or absent_count == 0:
             continue
-            
+
         # Calculate frequency (number of present alleles)
         frequency = present_count
-        
+
         # Store classification information
         classification[ortholog_id] = {
             "frequency": frequency,
@@ -79,7 +96,8 @@ def classify_group1_orthologs(df, group1):
             "total_count": total_count,
             "frequency_category": get_frequency_category(frequency, total_count)
         }
-    
+
+    print(f"  Skipped {skipped_low_identity} groups with low_identity within-group status")
     return classification
 
 def get_frequency_category(present_count, total_count):

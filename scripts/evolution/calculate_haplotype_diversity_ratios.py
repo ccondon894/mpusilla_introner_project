@@ -87,12 +87,21 @@ def calculate_haplotype_diversity_ratios(introner_metrics_file, genotype_matrix_
 
     # Filter to only truly polymorphic loci: must have both presence==1 AND
     # presence==2 calls within Group 1. Loci where "absent" samples are all
-    # presence==3 (not callable) are excluded.
+    # presence==3 (not callable) are excluded. Additionally drop groups with
+    # suspect within-group classification (low_identity) so PHDR/AHDR are
+    # computed only on trustworthy ortholog calls.
+    accepted_within_status = {'consistent', 'singleton'}
     group2_samples = {'RCC1749', 'RCC3052'}
     g1_gm = genotype_df[~genotype_df['sample'].isin(group2_samples)]
 
     polymorphic_oids = set()
+    skipped_low_identity = 0
     for oid, grp in g1_gm.groupby('ortholog_id'):
+        if 'within_group_status' in grp.columns:
+            within_vals = grp['within_group_status'].dropna().unique()
+            if len(within_vals) > 0 and str(within_vals[0]) not in accepted_within_status:
+                skipped_low_identity += 1
+                continue
         presences = set(grp['presence'])
         if 1 in presences and 2 in presences:
             polymorphic_oids.add(oid)
@@ -102,8 +111,10 @@ def calculate_haplotype_diversity_ratios(introner_metrics_file, genotype_matrix_
     n_after = len(introner_df)
 
     if verbose:
-        print(f"Filtered to truly polymorphic loci (both present and absent calls in Group 1):")
+        print(f"Filtered to trustworthy polymorphic loci "
+              f"(consistent/singleton, both present and absent calls in Group 1):")
         print(f"  Before: {n_before}, After: {n_after}, Removed: {n_before - n_after}")
+        print(f"  (Skipped {skipped_low_identity} groups with low_identity within-group status)")
 
     results = []
     missing_fourfold_count = 0

@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 """
-Identify introner loci shared between Group 1 and Group 2, classify them into
-three categories, and generate BED files for introner body and flanking regions.
+Identify cross-group shared introner loci between Group 1 and Group 2,
+classify them, and generate BED files for introner body and flanking regions.
 
-Categories:
-  - all_shared: presence==1 in at least one Group 1 AND one Group 2 sample
-  - fixed_shared: presence==1 in ALL Group 1 AND ALL Group 2 samples
-  - polymorphic_shared: shared but not fixed (all_shared minus fixed_shared)
+Uses the new classification columns from the genotype matrix:
+  - Filter to cross_group_status in any classified value (ancestral set
+    OR independent set) — both are included so downstream can contrast them
+  - Filter out within_group_status == 'low_identity' groups (suspect
+    ortholog mergings)
+
+Cross-group classes:
+  - ancestral subset: ancestral, likely_ancestral, ancestral_low_identity
+  - independent subset: independent, likely_independent
+
+Fixation subcategories (presence-based):
+  - fixed_shared: presence==1 in ALL G1 AND ALL G2 samples
+  - polymorphic_shared: cross-group comparison possible but not fixed
+
+Each locus gets both a `category` (fixation) and an `ancestry_class`
+(ancestral vs independent) to support flexible downstream analysis.
 
 Presence encoding:
   1 = present, 2 = absent, 3 = not callable
@@ -38,12 +50,36 @@ def parse_arguments():
     return parser.parse_args()
 
 
+ANCESTRAL_CROSS_GROUP = {
+    'ancestral', 'likely_ancestral', 'ancestral_low_identity',
+}
+INDEPENDENT_CROSS_GROUP = {
+    'independent', 'likely_independent',
+}
+CLASSIFIED_CROSS_GROUP = ANCESTRAL_CROSS_GROUP | INDEPENDENT_CROSS_GROUP
+
+
 def classify_shared_loci(df, group1_samples, group2_samples):
-    """Classify shared loci into three categories."""
+    """Classify cross-group shared loci (both ancestral and independent).
+
+    Filters on:
+      - within_group_status != 'low_identity' (drop suspect mergings)
+      - cross_group_status in CLASSIFIED_CROSS_GROUP (has cross-group evidence)
+
+    Keeps `cross_group_status` in the output so downstream scripts can split
+    ancestral (3 subcategories) from independent (2 subcategories).
+
+    Falls back gracefully if the classification columns aren't in the matrix
+    (e.g. legacy matrices) by reverting to the old presence-based definition.
+    """
     group1_set = set(group1_samples)
     group2_set = set(group2_samples)
 
     classification = {}
+    skipped_low_identity = 0
+    skipped_unclassified = 0
+    has_new_cols = ('within_group_status' in df.columns and
+                    'cross_group_status' in df.columns)
 
     for ortholog_id, group in df.groupby('ortholog_id'):
         g1 = group[group['sample'].isin(group1_set)]
@@ -53,9 +89,27 @@ def classify_shared_loci(df, group1_samples, group2_samples):
         g2_present = set(g2[g2['presence'] == 1]['sample'])
 
         if not g1_present or not g2_present:
-            continue  # Not shared
+            continue  # No cross-group comparison possible
 
-        # Determine category
+        # Classification-aware filtering (new columns)
+        cross_status = 'NA'
+        within_status = ''
+        if has_new_cols:
+            within_vals = group['within_group_status'].dropna().unique()
+            if len(within_vals) > 0:
+                within_status = str(within_vals[0])
+                if within_status == 'low_identity':
+                    skipped_low_identity += 1
+                    continue
+
+            cross_vals = group['cross_group_status'].dropna().unique()
+            if len(cross_vals) > 0:
+                cross_status = str(cross_vals[0])
+            if cross_status not in CLASSIFIED_CROSS_GROUP:
+                skipped_unclassified += 1
+                continue
+
+        # Determine fixation subcategory (still presence-based)
         all_g1_present = g1_present == group1_set
         all_g2_present = g2_present == group2_set
 
@@ -64,13 +118,29 @@ def classify_shared_loci(df, group1_samples, group2_samples):
         else:
             category = "polymorphic_shared"
 
+        # Broad ancestry class derived from cross_group_status
+        if cross_status in ANCESTRAL_CROSS_GROUP:
+            ancestry_class = 'ancestral'
+        elif cross_status in INDEPENDENT_CROSS_GROUP:
+            ancestry_class = 'independent'
+        else:
+            ancestry_class = 'unclassified'
+
         classification[ortholog_id] = {
             'category': category,
+            'cross_group_status': cross_status,
+            'ancestry_class': ancestry_class,
+            'within_group_status': within_status,
             'group1_present': sorted(g1_present),
             'group2_present': sorted(g2_present),
             'group1_present_count': len(g1_present),
             'group2_present_count': len(g2_present),
         }
+
+    if has_new_cols:
+        print(f"  Skipped {skipped_low_identity} low_identity groups")
+        print(f"  Skipped {skipped_unclassified} unclassified groups "
+              f"(no cross_group_status)")
 
     return classification
 
