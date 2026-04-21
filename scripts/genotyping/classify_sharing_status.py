@@ -276,18 +276,27 @@ def _assess_within_group(typed_members, codon_tolerance):
 def _assess_cross_group(typed_members, codon_tolerance):
     """Assess cross-group relationship between G1 and G2.
 
-    Returns one of: ancestral, independent, uncertain.
+    Returns a (status, reason) tuple:
+      status: one of 'ancestral', 'independent', 'uncertain'
+      reason: fine-grained label for which classification branch fired
+              ('ancestral_exact', 'ancestral_aa_match',
+               'different_position', 'close_diff_aa_ctx',
+               'compatible_diff_family', 'exact_diff_family',
+               'uncertain_no_keys', 'uncertain_single_clade')
 
-    Different-family cases (same_site_diff_family, ambiguous_diff_family)
-    are classified as independent: family assignment is strong evidence
-    that the introners are separate insertion events regardless of
-    positional similarity.
+    Different-family cases are classified as independent: family assignment
+    is strong evidence that the introners are separate insertion events
+    regardless of positional similarity. The reason column distinguishes
+    'different_position' and 'close_diff_aa_ctx' from the genuinely-
+    same-site cases; downstream splitting can use this to separate
+    mispaired clade-specific insertions from real convergent same-site
+    insertions.
     """
     g1_members = [m for m in typed_members if m['group'] == 'G1']
     g2_members = [m for m in typed_members if m['group'] == 'G2']
 
     if not g1_members or not g2_members:
-        return 'uncertain'
+        return 'uncertain', 'uncertain_single_clade'
 
     # Get representative locus key and family for each group
     def get_consensus(group_members):
@@ -303,7 +312,7 @@ def _assess_cross_group(typed_members, codon_tolerance):
     g2_key, g2_family = get_consensus(g2_members)
 
     if g1_key is None or g2_key is None:
-        return 'uncertain'
+        return 'uncertain', 'uncertain_no_keys'
 
     same_family = (g1_family == g2_family)
 
@@ -311,7 +320,8 @@ def _assess_cross_group(typed_members, codon_tolerance):
     compatible = keys_within_tolerance(g1_key, g2_key, codon_tolerance)
 
     if not compatible:
-        return 'independent'
+        # Neither aa context nor legacy keys match → truly different sites
+        return 'independent', 'different_position'
 
     # Compatible: determine how strong the match is.
     # Exact match: aa contexts are identical, OR (if no aa context) the
@@ -328,11 +338,14 @@ def _assess_cross_group(typed_members, codon_tolerance):
         exact_match = (g1_key == g2_key)
 
     if exact_match and same_family:
-        return 'ancestral'
+        return 'ancestral', 'ancestral_exact'
+
+    if exact_match and not same_family:
+        return 'independent', 'exact_diff_family'
 
     if not same_family:
-        # Different families → independent regardless of position match
-        return 'independent'
+        # Compatible positions but different families (not exact match)
+        return 'independent', 'compatible_diff_family'
 
     # Compatible but not exact, same family. Distinguish by HOW the keys
     # matched: if the amino acid contexts around the insertion site are
@@ -344,27 +357,27 @@ def _assess_cross_group(typed_members, codon_tolerance):
         _, aa1, _ = g1_key
         _, aa2, _ = g2_key
         if aa1 and aa2 and aa_contexts_match(aa1, aa2):
-            return 'ancestral'
+            return 'ancestral', 'ancestral_aa_match'
 
-    return 'independent'
+    return 'independent', 'close_diff_aa_ctx'
 
 
 def classify_ortholog_group(members, codon_tolerance=CODON_TOLERANCE):
     """Classify the sharing status of an ortholog group.
 
-    Returns (within_group_status, cross_group_status) tuple.
+    Returns (within_group_status, cross_group_status, cross_group_reason) tuple.
 
     within_group_status: 'consistent', 'discordant', 'uncertain', or 'singleton'
-    cross_group_status:  'ancestral', 'independent', 'ambiguous',
-                         'ambiguous_diff_family', 'same_site_diff_family',
-                         'uncertain', or 'NA'
+    cross_group_status:  'ancestral', 'independent', 'uncertain', or 'NA'
+    cross_group_reason:  fine-grained reason for the cross_group_status.
+                         Empty string when cross_group_status is NA.
     """
     n_present = len(members)
 
     if n_present == 0:
-        return ('uncertain', 'NA')
+        return ('uncertain', 'NA', '')
     if n_present == 1:
-        return ('singleton', 'NA')
+        return ('singleton', 'NA', '')
 
     typed = [m for m in members if m['confidence'] == 'high']
 
@@ -377,11 +390,11 @@ def classify_ortholog_group(members, codon_tolerance=CODON_TOLERANCE):
 
     # Cross-group status
     if has_both:
-        cross_status = _assess_cross_group(typed, codon_tolerance)
+        cross_status, cross_reason = _assess_cross_group(typed, codon_tolerance)
     else:
-        cross_status = 'NA'
+        cross_status, cross_reason = 'NA', ''
 
-    return (within_status, cross_status)
+    return (within_status, cross_status, cross_reason)
 
 
 def main():
@@ -423,6 +436,7 @@ def main():
     # Classify each ortholog group
     within_counts = defaultdict(int)
     cross_counts = defaultdict(int)
+    reason_counts = defaultdict(int)
     group_summaries = []
 
     for oid, row_indices in ortholog_groups.items():
@@ -455,10 +469,12 @@ def main():
             })
 
         # Classify
-        within_status, cross_status = classify_ortholog_group(
+        within_status, cross_status, cross_reason = classify_ortholog_group(
             members, args.codon_tolerance)
         within_counts[within_status] += 1
         cross_counts[cross_status] += 1
+        if cross_reason:
+            reason_counts[cross_reason] += 1
 
         # Store summary for this group
         if members:
@@ -478,6 +494,7 @@ def main():
                 'ortholog_id': oid,
                 'within_group_status': within_status,
                 'cross_group_status': cross_status,
+                'cross_group_reason': cross_reason,
                 'n_present': len(members),
                 'n_fingerprinted': len(typed),
                 'families': ';'.join(sorted(set(m['family'] for m in members))),
@@ -488,6 +505,7 @@ def main():
         for idx in row_indices:
             matrix_rows[idx]['within_group_status'] = within_status
             matrix_rows[idx]['cross_group_status'] = cross_status
+            matrix_rows[idx]['cross_group_reason'] = cross_reason
 
     # Print summary
     print(f"\nWithin-group status (codon_tolerance={args.codon_tolerance}):")
@@ -500,14 +518,20 @@ def main():
         pct = 100 * count / max(1, len(ortholog_groups))
         print(f"  {status:30s}  {count:5d}  ({pct:.1f}%)")
 
+    if reason_counts:
+        print(f"\nCross-group reason breakdown:")
+        for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1]):
+            print(f"  {reason:30s}  {count:5d}")
+
     print(f"  {'TOTAL':30s}  {len(ortholog_groups):5d}")
 
     # Write output matrix
     # Remove old sharing_status if present, add new columns
     out_fieldnames = [f for f in fieldnames
                       if f not in ('sharing_status', 'within_group_status',
-                                   'cross_group_status')]
-    out_fieldnames += ['within_group_status', 'cross_group_status']
+                                   'cross_group_status', 'cross_group_reason')]
+    out_fieldnames += ['within_group_status', 'cross_group_status',
+                       'cross_group_reason']
 
     with open(args.output, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=out_fieldnames, delimiter='\t',
@@ -520,10 +544,11 @@ def main():
     # Write optional summary
     if args.summary:
         summary_fields = ['ortholog_id', 'within_group_status',
-                          'cross_group_status', 'n_present',
-                          'n_fingerprinted', 'families', 'loci']
+                          'cross_group_status', 'cross_group_reason',
+                          'n_present', 'n_fingerprinted', 'families', 'loci']
         with open(args.summary, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=summary_fields, delimiter='\t')
+            writer = csv.DictWriter(f, fieldnames=summary_fields, delimiter='\t',
+                                    extrasaction='ignore')
             writer.writeheader()
             writer.writerows(group_summaries)
         print(f"Wrote {len(group_summaries)} group summaries to {args.summary}")

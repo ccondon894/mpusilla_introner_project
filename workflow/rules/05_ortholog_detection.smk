@@ -602,6 +602,80 @@ rule reclassify_after_split:
         """
 
 
+rule split_cross_group_mispairs_pass2:
+    """
+    Second-pass splitting for cross-group mispairs that surfaced only after
+    the first reclassify.
+
+    The first pass of `split_overmerged_orthologs` catches within-group
+    over-merges plus any cross-group mispairs visible at the initial
+    classification. But within-group splits create new sub-groups (_split1,
+    _split2) whose cross-group relationship is only determined by the
+    subsequent `reclassify_after_split`. If a within-split sub-group now
+    contains G1 and G2 members at genuinely different sites, it needs
+    another round of cross-group splitting.
+
+    Runs the same splitter script with --cross-group-only, so within-group
+    logic is skipped and only cross_group_reason flagged groups get split.
+    """
+    input:
+        split_verified_matrix = GENOTYPING_DIR / "genotype_matrix.split_verified.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES),
+        beds = expand(
+            BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
+            sample=ALL_SAMPLES),
+        gtfs = expand(
+            ANNOTATIONS_DIR / "{sample}.gtf",
+            sample=ALL_SAMPLES)
+    output:
+        split_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split.tsv",
+        mapping = GENOTYPING_DIR / "insertion_fingerprints" / "cross_split_mapping.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/split_overmerged_orthologs.py \
+            --matrix {input.split_verified_matrix} \
+            --fingerprints {input.fingerprints} \
+            --beds {input.beds} \
+            --gtfs {input.gtfs} \
+            --output {output.split_matrix} \
+            --mapping {output.mapping} \
+            --codon-tolerance {params.codon_tolerance} \
+            --cross-group-only
+        """
+
+
+rule reclassify_after_cross_split:
+    """
+    Re-run sharing-status classification on the post-pass-2 matrix so the
+    new cgsplit sub-groups get `within_group_status = consistent` and
+    `cross_group_status = NA` labels reflecting their clade-specific
+    composition.
+    """
+    input:
+        split_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES)
+    output:
+        reclassified_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split_verified.tsv",
+        summary = GENOTYPING_DIR / "insertion_fingerprints" / "sharing_summary_cross_split.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/classify_sharing_status.py \
+            --matrix {input.split_matrix} \
+            --fingerprints {input.fingerprints} \
+            --output {output.reclassified_matrix} \
+            --summary {output.summary} \
+            --codon-tolerance {params.codon_tolerance}
+        """
+
+
 rule compare_introner_sequences:
     """
     Refine within_group_status and cross_group_status using body sequence identity.
@@ -617,7 +691,7 @@ rule compare_introner_sequences:
     Adds audit columns: within_group_identity, cross_group_identity.
     """
     input:
-        verified_matrix = GENOTYPING_DIR / "genotype_matrix.split_verified.tsv",
+        verified_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split_verified.tsv",
         genome_indices = expand(
             ASSEMBLIES_DIR / "{sample}.vg_paths.fa.fai",
             sample=ALL_SAMPLES)

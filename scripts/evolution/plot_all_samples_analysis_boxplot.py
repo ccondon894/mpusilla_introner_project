@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """
-Create a 2-panel boxplot figure for all-samples diversity analysis.
+Create a 2-panel boxplot figure for all-samples Dxy analysis.
 
-Panel A: Flanking region Dxy across fixation categories
-  - Group 1 present & Group 2 absent
-  - Group 1 absent & Group 2 present
-  - All shared loci
-  - Fixed shared loci
+Panel A uses both the all-samples flanking metrics (clade-specific boxes)
+and the shared introner Dxy (ancestral vs independent). Panel B uses only
+the shared introner Dxy for body-level comparison.
 
-Panel B: Introner body Dxy for shared loci, split by family concordance
-  - All shared, same family
-  - All shared, different family
-  - Fixed shared, same family
-  - Fixed shared, different family
+`ancestral` collapses {ancestral, likely_ancestral, ancestral_low_identity};
+`independent` collapses {independent, likely_independent}.
+
+Panel A: Flanking region Dxy
+  - Group 1 present & Group 2 absent (clade-specific)
+  - Group 1 absent & Group 2 present (clade-specific)
+  - Ancestral (combined subcategories)
+  - Independent (combined subcategories)
+
+Panel B: Introner body Dxy (highlights sequence identity differences)
+  - Ancestral (expected: moderate Dxy from shared evolutionary history)
+  - Independent (expected: high Dxy — essentially unrelated sequences)
 """
 
 import argparse
@@ -120,9 +125,10 @@ def make_boxplot_panel(ax, data_dict, labels, colors, ylabel, comparisons=None):
                 transform=ax.transAxes)
         return
 
-    sns.boxplot(x='category', y='value', hue='category', data=plot_df,
-               palette=dict(zip(labels, colors)), ax=ax, width=0.6,
-               showfliers=False, fliersize=0, legend=False, linewidth=1.5)
+    sns.violinplot(x='category', y='value', hue='category', data=plot_df,
+                   palette=dict(zip(labels, colors)), ax=ax, width=0.8,
+                   inner='quartile', cut=0, density_norm='width',
+                   legend=False, linewidth=1.2)
 
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=13)
@@ -183,74 +189,67 @@ def main():
     print(f"Loading shared introner Dxy from {args.shared_dxy}")
     shared_df = pd.read_csv(args.shared_dxy, sep='\t')
 
+    ancestral_df = shared_df[shared_df['ancestry_class'] == 'ancestral']
+    independent_df = shared_df[shared_df['ancestry_class'] == 'independent']
+
     # ---- Panel A: Flanking Dxy ----
     print("\n=== Panel A: Flanking Dxy ===")
 
-    # Boxes 1-2 from flanking diversity metrics
+    # Clade-specific boxes from the all-samples flanking metrics TSV
     g1_present_g2_absent = flanking_df[flanking_df['category'] == 'group1_fixed_group2_absent']['dxy_group1_group2'].dropna().tolist()
     g1_absent_g2_present = flanking_df[flanking_df['category'] == 'group1_absent_group2_fixed']['dxy_group1_group2'].dropna().tolist()
 
-    # Boxes 3-4 from shared introner Dxy (flanking component)
-    all_shared_flank = shared_df['dxy_flank_mean'].dropna().tolist()
-    fixed_shared_flank = shared_df[shared_df['category'] == 'fixed_shared']['dxy_flank_mean'].dropna().tolist()
+    # Cross-group shared boxes from the shared introner Dxy TSV
+    ancestral_flank = ancestral_df['dxy_flank_mean'].dropna().tolist()
+    independent_flank = independent_df['dxy_flank_mean'].dropna().tolist()
 
     panel_a_data = {
         'g1_present_g2_absent': g1_present_g2_absent,
         'g1_absent_g2_present': g1_absent_g2_present,
-        'all_shared': all_shared_flank,
-        'fixed_shared': fixed_shared_flank,
+        'ancestral': ancestral_flank,
+        'independent': independent_flank,
     }
     panel_a_labels = [
-        'Group 1 present\nGroup 2 absent',
-        'Group 1 absent\nGroup 2 present',
-        'All shared',
-        'Fixed shared',
+        'G1 present\nG2 absent',
+        'G1 absent\nG2 present',
+        'Ancestral',
+        'Independent',
     ]
-    panel_a_colors = ['#3b528b', '#B91C1C', '#5ec962', '#2d6a4f']
+    panel_a_colors = ['#3b528b', '#B91C1C', '#2d6a4f', '#e76f51']
 
     panel_a_comparisons = [
         ('g1_present_g2_absent', 'g1_absent_g2_present'),
-        ('all_shared', 'fixed_shared'),
-        ('g1_present_g2_absent', 'all_shared'),
+        ('ancestral', 'independent'),
     ]
 
     for key, vals in panel_a_data.items():
-        print(f"  {key}: n={len(vals)}, median={np.median(vals):.4f}" if vals else f"  {key}: n=0")
+        if vals:
+            print(f"  {key}: n={len(vals)}, median={np.median(vals):.4f}, "
+                  f"mean={np.mean(vals):.4f}")
+        else:
+            print(f"  {key}: n=0")
 
     # ---- Panel B: Introner Body Dxy ----
-    print("\n=== Panel B: Introner Body Dxy ===")
+    print("\n=== Panel B: Introner Body Dxy (ancestral vs independent) ===")
 
-    valid_shared = shared_df.dropna(subset=['dxy_introner'])
-
-    all_same = valid_shared[valid_shared['family_concordance'] == 'same_family']['dxy_introner'].tolist()
-    all_diff = valid_shared[valid_shared['family_concordance'] == 'different_family']['dxy_introner'].tolist()
-    fixed_same = valid_shared[(valid_shared['category'] == 'fixed_shared') &
-                               (valid_shared['family_concordance'] == 'same_family')]['dxy_introner'].tolist()
-    fixed_diff = valid_shared[(valid_shared['category'] == 'fixed_shared') &
-                               (valid_shared['family_concordance'] == 'different_family')]['dxy_introner'].tolist()
+    ancestral_body = ancestral_df['dxy_introner'].dropna().tolist()
+    independent_body = independent_df['dxy_introner'].dropna().tolist()
 
     panel_b_data = {
-        'all_same': all_same,
-        'all_diff': all_diff,
-        'fixed_same': fixed_same,
-        'fixed_diff': fixed_diff,
+        'ancestral': ancestral_body,
+        'independent': independent_body,
     }
-    panel_b_labels = [
-        'All shared\nsame family',
-        'All shared\ndiff. family',
-        'Fixed shared\nsame family',
-        'Fixed shared\ndiff. family',
-    ]
-    panel_b_colors = ['#2ca02c', '#d62728', '#2d6a4f', '#8b0000']
+    panel_b_labels = ['Ancestral', 'Independent']
+    panel_b_colors = ['#2d6a4f', '#B91C1C']
 
-    panel_b_comparisons = [
-        ('all_same', 'all_diff'),
-        ('fixed_same', 'fixed_diff'),
-        ('all_same', 'fixed_same'),
-    ]
+    panel_b_comparisons = [('ancestral', 'independent')]
 
     for key, vals in panel_b_data.items():
-        print(f"  {key}: n={len(vals)}, median={np.median(vals):.4f}" if vals else f"  {key}: n=0")
+        if vals:
+            print(f"  {key}: n={len(vals)}, median={np.median(vals):.4f}, "
+                  f"mean={np.mean(vals):.4f}")
+        else:
+            print(f"  {key}: n=0")
 
     # ---- Create figure ----
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))

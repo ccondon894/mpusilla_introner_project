@@ -455,6 +455,140 @@ def build_absent_row(template_row, presence='2', locus_coords=None,
     return new_row
 
 
+# Cross-group reasons that indicate G1 and G2 are at distinct biological
+# sites (not a real ancestral/convergent locus). These orthologs should be
+# split into clade-specific sub-groups.
+CROSS_GROUP_SPLIT_REASONS = {
+    'different_position',  # positions aren't even in the same ballpark
+    'close_diff_aa_ctx',   # codon numbers close but aa context disagrees
+}
+
+
+def split_cross_group_mispair(oid, row_indices, matrix_rows, fps_by_coord,
+                               cds_by_sample_gene, codon_tolerance):
+    """Split a cross-group mispair into per-clade sub-groups.
+
+    A mispair is an ortholog where G1 members all cluster at one site and
+    G2 members cluster at a different site (flagged by classify_sharing_status
+    with cross_group_reason in CROSS_GROUP_SPLIT_REASONS). The flank-based
+    ortholog detection grouped them because they sit in homologous gene
+    contexts, but the actual introner positions are different biological
+    sites — so each clade should have its own ortholog_id.
+
+    Produces up to two sub-groups: `{oid}_cgsplit_g1` and `{oid}_cgsplit_g2`.
+    Each sub-group retains its clade's presence=1 rows and builds absent
+    rows for samples in the OTHER clade. Coordinate lookup for absent rows
+    uses `locate_consensus_in_gtf` against the present clade's consensus
+    codon, so the absent rows point to the equivalent position in the
+    other clade's genome (when the gene is annotated there).
+
+    Returns a list of (new_id, rows, n_subgroups, has_tandem) tuples
+    compatible with split_group_with_recovery's output format. Returns
+    None if the ortholog can't be meaningfully split (e.g., one clade
+    has no present members).
+    """
+    present_members = []
+    for idx in row_indices:
+        row = matrix_rows[idx]
+        if row['presence'] != '1':
+            continue
+        coord = (row['sample'], row['contig'],
+                 int(row['start']), int(row['end']))
+        fp = fps_by_coord.get(coord, {})
+        key = get_locus_key(fp)
+        present_members.append({
+            'idx': idx,
+            'sample': row['sample'],
+            'fp': fp,
+            'key': key,
+            'gene_id': fp.get('gene_id', ''),
+        })
+
+    g1_members = [m for m in present_members if m['sample'] not in GROUP2_SAMPLES]
+    g2_members = [m for m in present_members if m['sample'] in GROUP2_SAMPLES]
+
+    if not g1_members or not g2_members:
+        return None  # needs both clades present to be a cross-group mispair
+
+    # Gather per-clade sample templates for building absent rows
+    all_samples = []
+    seen = set()
+    sample_to_template = {}
+    for idx in row_indices:
+        s = matrix_rows[idx]['sample']
+        if s not in seen:
+            seen.add(s)
+            all_samples.append(s)
+            sample_to_template[s] = matrix_rows[idx]
+
+    # Helper: build a sub-group for one clade
+    def build_subgroup(clade_members, clade_label, other_clade_samples):
+        typed = [m for m in clade_members if m['key'] is not None]
+        if not typed:
+            return None
+
+        # Consensus key + gene for this clade
+        keys = [m['key'] for m in typed]
+        consensus_key, consensus_gene, fallback_key = get_consensus_key_and_gene(
+            list(range(len(typed))), keys, typed)
+
+        rows = []
+        samples_with_pres1 = set()
+
+        # Present rows for this clade
+        for m in clade_members:
+            row = dict(matrix_rows[m['idx']])
+            rows.append(row)
+            samples_with_pres1.add(m['sample'])
+
+        # Absent rows for samples not in this clade's cluster
+        # (includes the other clade's samples and any samples that were
+        # already presence=2/3 in the original ortholog)
+        for sample in all_samples:
+            if sample in samples_with_pres1:
+                continue
+            template = sample_to_template[sample]
+            original_presence = template['presence']
+            if original_presence == '3':
+                new_row = build_absent_row(template, presence='3')
+            else:
+                # presence=2 or absent: look up equivalent position in
+                # this sample's GTF via consensus gene + fallback codon/intron
+                locus_coords = None
+                if consensus_gene and fallback_key is not None:
+                    locus_coords = locate_consensus_in_gtf(
+                        sample, consensus_gene, fallback_key, cds_by_sample_gene)
+                new_row = build_absent_row(
+                    template, presence='2',
+                    locus_coords=locus_coords,
+                    consensus_gene=consensus_gene)
+            rows.append(new_row)
+
+        return rows
+
+    g1_rows = build_subgroup(g1_members, 'g1',
+                              [m['sample'] for m in g2_members])
+    g2_rows = build_subgroup(g2_members, 'g2',
+                              [m['sample'] for m in g1_members])
+
+    if g1_rows is None or g2_rows is None:
+        return None  # couldn't build consensus for one of the clades
+
+    # Stamp the new ortholog_id on each row
+    new_g1_id = f"{oid}_cgsplit_g1"
+    new_g2_id = f"{oid}_cgsplit_g2"
+    for row in g1_rows:
+        row['ortholog_id'] = new_g1_id
+    for row in g2_rows:
+        row['ortholog_id'] = new_g2_id
+
+    # No tandem check for cross-group splits (tandem is within-sample)
+    return [
+        (new_g1_id, g1_rows, 2, False),
+        (new_g2_id, g2_rows, 2, False),
+    ]
+
+
 def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
                                 fps_by_sample_gene, beds_by_coord, tandems,
                                 cds_by_sample_gene, codon_tolerance):
@@ -494,7 +628,15 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
     g2_clusters = cluster_keys(g2_keys, codon_tolerance) if g2_keys else []
 
     if len(g1_clusters) <= 1 and len(g2_clusters) <= 1:
-        return None  # no within-group over-merge
+        # No within-group multi-cluster. Check if this is a cross-group
+        # mispair (G1 and G2 at different sites flagged by classify).
+        first_row = matrix_rows[row_indices[0]]
+        cross_reason = first_row.get('cross_group_reason', '')
+        if cross_reason in CROSS_GROUP_SPLIT_REASONS:
+            return split_cross_group_mispair(
+                oid, row_indices, matrix_rows, fps_by_coord,
+                cds_by_sample_gene, codon_tolerance)
+        return None  # no over-merge of any kind
 
     # Step 3: Compute the global cluster assignment
     keys = [m['key'] for m in typed]
@@ -656,6 +798,13 @@ def main():
                         help='Optional ortholog ID mapping output')
     parser.add_argument('--codon-tolerance', type=int, default=CODON_TOLERANCE,
                         help='Tolerance for clustering codons (default: 3)')
+    parser.add_argument('--cross-group-only', action='store_true',
+                        help='Only perform cross-group mispair splitting; '
+                             'skip within-group splitting. Use this for the '
+                             'second pass after reclassify_after_split to '
+                             'catch cross-group mispairs that surfaced only '
+                             'after within-group splitting created new '
+                             'sub-groups.')
     args = parser.parse_args()
 
     # Load data
@@ -702,9 +851,24 @@ def main():
 
     for oid in sorted(ortholog_groups.keys()):
         row_indices = ortholog_groups[oid]
-        result = split_group_with_recovery(
-            oid, row_indices, matrix_rows, fps_by_coord, fps_by_sample_gene,
-            beds_by_coord, tandems, cds_by_sample_gene, args.codon_tolerance)
+        if args.cross_group_only:
+            # Pass-2 mode: only check for cross-group mispairs, skip the
+            # within-group clustering logic entirely. Triggered for groups
+            # whose cross_group_reason surfaced only after the first-pass
+            # reclassify (e.g., `_split1` sub-groups that turned out to be
+            # cross-group mispairs themselves).
+            first_row = matrix_rows[row_indices[0]]
+            cross_reason = first_row.get('cross_group_reason', '')
+            if cross_reason in CROSS_GROUP_SPLIT_REASONS:
+                result = split_cross_group_mispair(
+                    oid, row_indices, matrix_rows, fps_by_coord,
+                    cds_by_sample_gene, args.codon_tolerance)
+            else:
+                result = None
+        else:
+            result = split_group_with_recovery(
+                oid, row_indices, matrix_rows, fps_by_coord, fps_by_sample_gene,
+                beds_by_coord, tandems, cds_by_sample_gene, args.codon_tolerance)
 
         if result is None:
             # No split — keep original rows
@@ -736,6 +900,14 @@ def main():
         recovered_in_group = new_pres1_count - original_pres1_count
         n_recovered += recovered_in_group
 
+        # Tag cross-group splits distinctly in the mapping (new_id suffix
+        # is the cleanest signal since both split helpers use distinctive
+        # suffixes: _split{n} for within-group, _cgsplit_{g1,g2} for
+        # cross-group).
+        note = ('cross_group_split'
+                if any('_cgsplit_' in r[0] for r in result)
+                else 'split')
+
         for new_id, rows, _, has_tandem in result:
             output_rows.extend(rows)
             if has_tandem:
@@ -747,7 +919,7 @@ def main():
                 'n_members': sum(1 for r in rows if r['presence'] == '1'),
                 'n_recovered': recovered_in_group if new_id == result[0][0] else '',
                 'has_tandem': '1' if has_tandem else '0',
-                'note': 'split',
+                'note': note,
             })
 
     # Print summary
