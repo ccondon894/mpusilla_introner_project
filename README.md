@@ -42,18 +42,3 @@ snakemake -n --configfile config/config.yaml
 - **Group 1** (11 samples): CCMP1545 (reference), RCC114, RCC1614, RCC1698, RCC2482, RCC373, RCC465, RCC629, RCC692, RCC693, RCC833
 - **Group 2** (2 samples): RCC1749 (reference), RCC3052
 
-## Documentation
-
-- `PRD.md` - Full project requirements document
-- `progress.txt` - Implementation progress tracker
-- `config/config.yaml` - All configurable parameters
-- `docs/insertion_site_verification.md` - Codon-level introner verification
-  pipeline (sharing_status, splitting, sequence comparison)
-
-## Original Data Sources
-
-This project consolidates analyses from:
-- `/scratch1/chris/introner-genotyping-pipeline/`
-- `/scratch1/chris/introner-expression-analysis/`
-- `/scratch1/chris/introner_vis/`
-- `/scratch1/chris/mpusilla_go_analysis/`

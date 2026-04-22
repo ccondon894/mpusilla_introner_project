@@ -558,10 +558,18 @@ def split_cross_group_mispair(oid, row_indices, matrix_rows, fps_by_coord,
                 if consensus_gene and fallback_key is not None:
                     locus_coords = locate_consensus_in_gtf(
                         sample, consensus_gene, fallback_key, cds_by_sample_gene)
-                new_row = build_absent_row(
-                    template, presence='2',
-                    locus_coords=locus_coords,
-                    consensus_gene=consensus_gene)
+                if locus_coords is None:
+                    # Can't locate the equivalent site (annotation variation
+                    # between samples leaves fallback codon/intron out of
+                    # range). Downgrade to presence=3 so downstream pi/dxy
+                    # treats this sample as uncallable rather than emitting
+                    # a coord-less "absent" row.
+                    new_row = build_absent_row(template, presence='3')
+                else:
+                    new_row = build_absent_row(
+                        template, presence='2',
+                        locus_coords=locus_coords,
+                        consensus_gene=consensus_gene)
             rows.append(new_row)
 
         return rows
@@ -762,10 +770,18 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
                 if cgene and fallback_key is not None:
                     locus_coords = locate_consensus_in_gtf(
                         sample, cgene, fallback_key, cds_by_sample_gene)
-                new_row = build_absent_row(
-                    template, presence='2',
-                    locus_coords=locus_coords,
-                    consensus_gene=cgene)
+                if locus_coords is None:
+                    # Can't locate the equivalent site (annotation variation
+                    # between samples leaves fallback codon/intron out of
+                    # range). Downgrade to presence=3 so downstream pi/dxy
+                    # treats this sample as uncallable rather than emitting
+                    # a coord-less "absent" row.
+                    new_row = build_absent_row(template, presence='3')
+                else:
+                    new_row = build_absent_row(
+                        template, presence='2',
+                        locus_coords=locus_coords,
+                        consensus_gene=cgene)
             sub_group_rows[ci].append(new_row)
 
     # Step 8: Build sub-group results
