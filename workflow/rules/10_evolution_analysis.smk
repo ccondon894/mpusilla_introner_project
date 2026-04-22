@@ -39,6 +39,14 @@ DIVERSITY_DIR = EVOLUTION_DIR / "diversity_metrics"
 EVOLUTION_PLOTS_DIR = EVOLUTION_DIR / "plots"
 EVOLUTION_LOG_DIR = EVOLUTION_DIR / "logs"
 
+# Local aliases: later-loaded rule files (30_expression.smk,
+# 31_isoform_analysis.smk) redefine ALIGNMENT_DIR and DIVERSITY_DIR at
+# global scope. We capture the evolution paths here so lambdas and shell
+# directives within this file reference the correct directory regardless
+# of load order.
+_EVO_ALIGNMENT_DIR = ALIGNMENT_DIR
+_EVO_DIVERSITY_DIR = DIVERSITY_DIR
+
 # Input directories from previous steps
 COVERAGE_BAM_DIR = GENOTYPING_DIR / "coverage" / "bams"
 
@@ -66,109 +74,98 @@ wildcard_constraints:
 # HELPER FUNCTIONS
 # ============================================================
 
+def _collect_all_samples_alignment_files(classification_file, flank_length):
+    """Return alignment files whose source .fa was actually written.
+
+    classify_all_samples_orthologs.py only writes a per-group .fa file when
+    at least one sequence could be extracted (e.g. absent samples without
+    valid coords contribute nothing, so the file may not be created). We
+    filter to existing .fa sources here so Snakemake doesn't request
+    non-buildable .mafft.fa files.
+    """
+    with open(classification_file, "r") as f:
+        classification = json.load(f)
+
+    alignment_dir_bp = _EVO_ALIGNMENT_DIR / f"{flank_length}bp"
+    alignment_files = []
+
+    for oid, info in classification.items():
+        category = info["category"]
+        for side in SIDES:
+            g1_src = alignment_dir_bp / f"{oid}.{category}.group1.{side}_flank_{flank_length}bp.fa"
+            g2_src = alignment_dir_bp / f"{oid}.{category}.group2.{side}_flank_{flank_length}bp.fa"
+
+            if g1_src.exists():
+                alignment_files.append(
+                    alignment_dir_bp / f"{oid}.{category}.group1.{side}_flank_{flank_length}bp.mafft.fa"
+                )
+            if g2_src.exists():
+                alignment_files.append(
+                    alignment_dir_bp / f"{oid}.{category}.group2.{side}_flank_{flank_length}bp.mafft.fa"
+                )
+            if g1_src.exists() and g2_src.exists():
+                alignment_files.append(
+                    alignment_dir_bp / f"{oid}.{category}.combined.{side}_flank_{flank_length}bp.mafft.fa"
+                )
+
+    return alignment_files
+
+
 def get_all_samples_alignment_files(wildcards):
     """Get all alignment files for all-samples analysis"""
-    classification_file = ALIGNMENT_DIR / f"all_samples_classification_{wildcards.flank_length}bp.json"
+    classification_file = _EVO_ALIGNMENT_DIR / f"all_samples_classification_{wildcards.flank_length}bp.json"
     if exists(classification_file):
-        with open(classification_file, "r") as f:
-            classification = json.load(f)
-
-        alignment_files = []
-        for oid, info in classification.items():
-            category = info["category"]
-            for side in SIDES:
-                alignment_files.extend([
-                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.group1.{side}_flank_{wildcards.flank_length}bp.mafft.fa",
-                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.group2.{side}_flank_{wildcards.flank_length}bp.mafft.fa",
-                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.combined.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
-                ])
-        return alignment_files
+        return _collect_all_samples_alignment_files(classification_file, wildcards.flank_length)
 
     # Defer evaluation until checkpoint completes - this prevents file I/O during DAG construction
-    else:
-        checkpoints.classify_all_samples_orthologs.get()
+    checkpoints.classify_all_samples_orthologs.get()
+    if not classification_file.exists():
+        return []
+    return _collect_all_samples_alignment_files(classification_file, wildcards.flank_length)
 
-        classification_file = ALIGNMENT_DIR / f"all_samples_classification_{wildcards.flank_length}bp.json"
 
-        if not classification_file.exists():
-            return []
+def _collect_group1_alignment_files(classification_file, flank_length):
+    """Return Group1 alignment files whose source .fa was actually written."""
+    with open(classification_file, "r") as f:
+        classification = json.load(f)
 
-        with open(classification_file, "r") as f:
-            classification = json.load(f)
+    alignment_dir_bp = _EVO_ALIGNMENT_DIR / f"{flank_length}bp"
+    alignment_files = []
 
-        alignment_files = []
-        for oid, info in classification.items():
-            category = info["category"]
-            for side in SIDES:
-                alignment_files.extend([
-                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.group1.{side}_flank_{wildcards.flank_length}bp.mafft.fa",
-                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.group2.{side}_flank_{wildcards.flank_length}bp.mafft.fa",
-                    ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.{category}.combined.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
-                ])
-        return alignment_files
+    for oid, info in classification.items():
+        freq = info["frequency"]
+        for side in SIDES:
+            present_src = alignment_dir_bp / f"{oid}.freq_{freq}.present.{side}_flank_{flank_length}bp.fa"
+            absent_src = alignment_dir_bp / f"{oid}.freq_{freq}.absent.{side}_flank_{flank_length}bp.fa"
+
+            if present_src.exists():
+                alignment_files.append(
+                    alignment_dir_bp / f"{oid}.freq_{freq}.present.{side}_flank_{flank_length}bp.mafft.fa"
+                )
+            if absent_src.exists():
+                alignment_files.append(
+                    alignment_dir_bp / f"{oid}.freq_{freq}.absent.{side}_flank_{flank_length}bp.mafft.fa"
+                )
+            if present_src.exists() and absent_src.exists():
+                alignment_files.append(
+                    alignment_dir_bp / f"{oid}.freq_{freq}.combined.{side}_flank_{flank_length}bp.mafft.fa"
+                )
+
+    return alignment_files
 
 
 def get_group1_alignment_files(wildcards):
     """Get all alignment files for Group1 analysis"""
-    classification_file = ALIGNMENT_DIR / f"group1_classification_{wildcards.flank_length}bp.json"
+    classification_file = _EVO_ALIGNMENT_DIR / f"group1_classification_{wildcards.flank_length}bp.json"
 
     if exists(classification_file):
-        with open(classification_file, "r") as f:
-            classification = json.load(f)
+        return _collect_group1_alignment_files(classification_file, wildcards.flank_length)
 
-        alignment_files = []
-        for oid, info in classification.items():
-            freq = info["frequency"]
-            present_count = info["present_count"]
-            absent_count = info["absent_count"]
-
-            for side in SIDES:
-                if present_count > 0:
-                    alignment_files.append(
-                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.present.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
-                    )
-                if absent_count > 0:
-                    alignment_files.append(
-                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.absent.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
-                    )
-                if present_count > 0 and absent_count > 0:
-                    alignment_files.append(
-                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.combined.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
-                    )
-        return alignment_files
-
-    # Defer evaluation until checkpoint completes - this prevents file I/O during DAG construction
-    else:
-        checkpoints.classify_group1_orthologs.get()
-
-        classification_file = ALIGNMENT_DIR / f"group1_classification_{wildcards.flank_length}bp.json"
-
-        if not classification_file.exists():
-            return []
-
-        with open(classification_file, "r") as f:
-            classification = json.load(f)
-
-        alignment_files = []
-        for oid, info in classification.items():
-            freq = info["frequency"]
-            present_count = info["present_count"]
-            absent_count = info["absent_count"]
-
-            for side in SIDES:
-                if present_count > 0:
-                    alignment_files.append(
-                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.present.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
-                    )
-                if absent_count > 0:
-                    alignment_files.append(
-                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.absent.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
-                    )
-                if present_count > 0 and absent_count > 0:
-                    alignment_files.append(
-                        ALIGNMENT_DIR / f"{wildcards.flank_length}bp" / f"{oid}.freq_{freq}.combined.{side}_flank_{wildcards.flank_length}bp.mafft.fa"
-                    )
-        return alignment_files
+    # Defer evaluation until checkpoint completes
+    checkpoints.classify_group1_orthologs.get()
+    if not classification_file.exists():
+        return []
+    return _collect_group1_alignment_files(classification_file, wildcards.flank_length)
 
 
 # ============================================================
@@ -383,11 +380,12 @@ rule calculate_all_samples_diversity:
     output:
         metrics = DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv"
     params:
-        alignment_dir = ALIGNMENT_DIR,
-        classification = lambda wildcards: str(ALIGNMENT_DIR / f"all_samples_classification_{wildcards.flank_length}bp.json")
+        alignment_dir = _EVO_ALIGNMENT_DIR,
+        diversity_dir = _EVO_DIVERSITY_DIR,
+        classification = lambda wildcards: str(_EVO_ALIGNMENT_DIR / f"all_samples_classification_{wildcards.flank_length}bp.json")
     shell:
         """
-        mkdir -p {DIVERSITY_DIR}
+        mkdir -p {params.diversity_dir}
         python {PROJECT_ROOT}/scripts/evolution/calculate_all_samples_diversity_metrics_ros.py \
             --alignment_dir {params.alignment_dir} \
             --classification {params.classification} \
@@ -501,11 +499,12 @@ rule calculate_group1_diversity:
     output:
         metrics = DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv"
     params:
-        alignment_dir = ALIGNMENT_DIR,
-        classification = lambda wildcards: str(ALIGNMENT_DIR / f"group1_classification_{wildcards.flank_length}bp.json")
+        alignment_dir = _EVO_ALIGNMENT_DIR,
+        diversity_dir = _EVO_DIVERSITY_DIR,
+        classification = lambda wildcards: str(_EVO_ALIGNMENT_DIR / f"group1_classification_{wildcards.flank_length}bp.json")
     shell:
         """
-        mkdir -p {DIVERSITY_DIR}
+        mkdir -p {params.diversity_dir}
         python {PROJECT_ROOT}/scripts/evolution/calculate_group1_diversity_metrics_ros.py \
             --alignment_dir {params.alignment_dir} \
             --classification {params.classification} \

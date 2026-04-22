@@ -4,6 +4,9 @@ import os
 import numpy as np
 
 
+GROUP2_SAMPLES = {'RCC1749', 'RCC3052'}
+
+
 gt_matrix_file = sys.argv[1]
 bed_path = sys.argv[2]
 gt_matrix_out = sys.argv[3]
@@ -22,6 +25,83 @@ for file in os.listdir(bed_path):
             chrom, start, end, ortho_id, new_call = row['contig'], row['start'], row['end'], row['ortholog_id'], int(row['new_call'])
             # update call df with new call
             gt_df.loc[(gt_df['contig'] == chrom) & (gt_df['start'] == start) & (gt_df['end'] == end) & (gt_df['ortholog_id'] == ortho_id), 'presence'] = new_call
+
+
+# Reconcile classification labels with post-coverage presence state.
+# Coverage can flip 1 -> 2/3, which can invalidate the pre-coverage labels:
+#   - A multi-member "consistent" group with only 1 remaining member is now
+#     a "singleton"; identity columns lose meaning
+#   - A cross-group (G1+G2) ortholog that lost all members of one clade is
+#     now within-group-only, so cross_group_status should be NA
+#   - A group with zero presence=1 members is uninformative and gets dropped
+# Multi-member groups that lost some but kept >=2 members stay as-is — their
+# labels remain biologically accurate for the remaining present set.
+if 'within_group_status' in gt_df.columns:
+    g2_mask = gt_df['sample'].isin(GROUP2_SAMPLES)
+    present_mask = gt_df['presence'] == 1
+
+    present_rows = gt_df[present_mask]
+    n_present = present_rows.groupby('ortholog_id').size()
+    n_g1_present = present_rows[~present_rows['sample'].isin(GROUP2_SAMPLES)] \
+        .groupby('ortholog_id').size()
+    n_g2_present = present_rows[present_rows['sample'].isin(GROUP2_SAMPLES)] \
+        .groupby('ortholog_id').size()
+
+    all_oids = set(gt_df['ortholog_id'].unique())
+    empty_groups = all_oids - set(n_present.index)
+    singleton_oids = set(n_present[n_present == 1].index)
+
+    # Groups whose pre-coverage cross_group_status was non-NA but which now
+    # lack members in one clade: downgrade cross_group_status to NA.
+    def _is_na_cross(v):
+        return pd.isna(v) or v == '' or v == 'NA'
+
+    first_rows = gt_df.drop_duplicates('ortholog_id').set_index('ortholog_id')
+    cross_to_na_oids = set()
+    if 'cross_group_status' in gt_df.columns:
+        for oid, row in first_rows.iterrows():
+            if oid in empty_groups:
+                continue
+            if _is_na_cross(row.get('cross_group_status', '')):
+                continue
+            has_g1 = n_g1_present.get(oid, 0) > 0
+            has_g2 = n_g2_present.get(oid, 0) > 0
+            if not (has_g1 and has_g2):
+                cross_to_na_oids.add(oid)
+
+    # Identity columns load as float64; cast to object so we can write
+    # empty strings for cleared values
+    for col in ('within_group_identity', 'cross_group_identity'):
+        if col in gt_df.columns:
+            gt_df[col] = gt_df[col].astype(object)
+
+    # Apply: within-group-status = singleton (and clear within_group_identity)
+    if singleton_oids:
+        mask = (gt_df['ortholog_id'].isin(singleton_oids) &
+                (gt_df['within_group_status'] != 'singleton'))
+        n_downgraded = gt_df.loc[mask, 'ortholog_id'].nunique()
+        gt_df.loc[mask, 'within_group_status'] = 'singleton'
+        if 'within_group_identity' in gt_df.columns:
+            gt_df.loc[gt_df['ortholog_id'].isin(singleton_oids),
+                      'within_group_identity'] = ''
+        print(f"Downgraded {n_downgraded} groups to singleton "
+              f"(after coverage left them with 1 present member)")
+
+    # Apply: cross_group_status = NA (and clear cross_group_identity)
+    if cross_to_na_oids:
+        mask = gt_df['ortholog_id'].isin(cross_to_na_oids)
+        gt_df.loc[mask, 'cross_group_status'] = ''
+        if 'cross_group_identity' in gt_df.columns:
+            gt_df.loc[mask, 'cross_group_identity'] = ''
+        print(f"Reset cross_group_status to NA for {len(cross_to_na_oids)} "
+              f"groups (one clade fully absent after coverage)")
+
+    # Drop groups with zero presence=1 members after coverage
+    if empty_groups:
+        n_empty_rows = gt_df['ortholog_id'].isin(empty_groups).sum()
+        gt_df = gt_df[~gt_df['ortholog_id'].isin(empty_groups)].copy()
+        print(f"Dropped {len(empty_groups)} empty groups "
+              f"({n_empty_rows} rows) with zero present members after coverage")
 
 # Convert numeric columns to integer type, handling NaN values
 if 'start' in gt_df.columns:

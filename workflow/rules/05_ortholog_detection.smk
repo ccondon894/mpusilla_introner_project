@@ -96,6 +96,71 @@ rule gtf_to_gene_bed:
         """
 
 
+rule compute_insertion_fingerprints:
+    """
+    Compute codon-level insertion fingerprints for introner loci.
+
+    For each introner with a gene and splice site annotation, maps the
+    insertion site to a (gene_id, codon_number, codon_offset) fingerprint
+    using the splice site position and GTF CDS exon structure.
+
+    Used downstream by classify_sharing_status to distinguish ancestral
+    shared introners from independent insertions at the same locus.
+    """
+    input:
+        bed = BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
+        gtf = ANNOTATIONS_DIR / "{sample}.gtf",
+        genome = ASSEMBLIES_DIR / "{sample}.vg_paths.fa",
+        genome_index = ASSEMBLIES_DIR / "{sample}.vg_paths.fa.fai"
+    output:
+        fingerprints = GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv"
+    shell:
+        """
+        mkdir -p {GENOTYPING_DIR}/insertion_fingerprints
+        python {PROJECT_ROOT}/scripts/genotyping/compute_insertion_fingerprints.py \
+            --bed {input.bed} \
+            --gtf {input.gtf} \
+            --genome {input.genome} \
+            --sample {wildcards.sample} \
+            --output {output.fingerprints}
+        """
+
+
+rule detect_tandem_duplicates:
+    """
+    Detect tandem duplications within each sample's introner candidate loci.
+
+    For each pair of introners in the same sample within a configurable
+    genomic window, checks if their body sequences have very high identity.
+    Groups them into tandem clusters via union-find.
+
+    Tandem clusters arise from gene duplications and produce introners
+    that the flank-based ortholog detection cannot distinguish (because
+    their flanking regions are also duplicated). The output is used to
+    flag affected ortholog groups in the splitting step.
+    """
+    input:
+        bed = BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
+        genome = ASSEMBLIES_DIR / "{sample}.vg_paths.fa",
+        genome_index = ASSEMBLIES_DIR / "{sample}.vg_paths.fa.fai"
+    output:
+        tandems = GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.tandems.tsv"
+    params:
+        window_bp = 10000,
+        min_identity = 0.95
+    shell:
+        """
+        mkdir -p {GENOTYPING_DIR}/insertion_fingerprints
+        python {PROJECT_ROOT}/scripts/genotyping/detect_tandem_duplicates.py \
+            --bed {input.bed} \
+            --genome {input.genome} \
+            --sample {wildcards.sample} \
+            --output {output.tandems} \
+            --window-bp {params.window_bp} \
+            --min-identity {params.min_identity}
+        """
+
+
 # ============================================================
 # PHASE 1A: Synteny-Based Context Mapping
 # ============================================================
@@ -415,21 +480,260 @@ rule fix_orientations:
         """
 
 
+rule classify_sharing_status:
+    """
+    Classify sharing status for introner ortholog groups.
+
+    Compares codon-level insertion fingerprints within each ortholog group
+    to produce two independent classifications:
+
+    within_group_status (consistency within each clade):
+      - consistent:  fingerprints agree within each clade
+      - discordant:  at least one clade has members at multiple sites
+      - uncertain:   insufficient fingerprint data
+      - singleton:   only 1 presence=1 member in the group
+
+    cross_group_status (G1 vs G2 ancestry):
+      - ancestral:    same insertion site (aa-context match) + same family
+      - independent:  different site, different family, or legacy-only match
+      - uncertain:    insufficient data for cross-group comparison
+      - NA:           no cross-group members
+    """
+    input:
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.oriented.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES)
+    output:
+        verified_matrix = GENOTYPING_DIR / "genotype_matrix.verified.tsv",
+        summary = GENOTYPING_DIR / "insertion_fingerprints" / "sharing_summary.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/classify_sharing_status.py \
+            --matrix {input.genotype_matrix} \
+            --fingerprints {input.fingerprints} \
+            --output {output.verified_matrix} \
+            --summary {output.summary} \
+            --codon-tolerance {params.codon_tolerance}
+        """
+
+
+rule split_overmerged_orthologs:
+    """
+    Split over-merged ortholog groups using codon/intron position clusters.
+
+    The flank-based ortholog detection can incorrectly merge introners
+    that are at distinct positions within the same gene because their
+    flanking sequences are similar (especially in tandem duplications,
+    paralogous gene copies, or genes with internal repeats).
+
+    This rule uses the codon/intron fingerprints to identify ortholog
+    groups where Group 1 OR Group 2 contains members at multiple distinct
+    positions (within-group over-merge). Such groups are split into
+    separate sub-ortholog-groups, one per position cluster.
+
+    Cross-group differences (G1 at one position, G2 at another) are
+    NOT split — they represent meaningful biology (independent insertions
+    at the same approximate locus).
+
+    The split matrix preserves the original ortholog ID in a new column
+    so that the original flank-based grouping can still be referenced.
+    """
+    input:
+        verified_matrix = GENOTYPING_DIR / "genotype_matrix.verified.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES),
+        beds = expand(
+            BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
+            sample=ALL_SAMPLES),
+        gtfs = expand(
+            ANNOTATIONS_DIR / "{sample}.gtf",
+            sample=ALL_SAMPLES),
+        tandems = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.tandems.tsv",
+            sample=ALL_SAMPLES)
+    output:
+        split_matrix = GENOTYPING_DIR / "genotype_matrix.split.tsv",
+        mapping = GENOTYPING_DIR / "insertion_fingerprints" / "split_mapping.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/split_overmerged_orthologs.py \
+            --matrix {input.verified_matrix} \
+            --fingerprints {input.fingerprints} \
+            --beds {input.beds} \
+            --gtfs {input.gtfs} \
+            --tandems {input.tandems} \
+            --output {output.split_matrix} \
+            --mapping {output.mapping} \
+            --codon-tolerance {params.codon_tolerance}
+        """
+
+
+rule reclassify_after_split:
+    """
+    Re-run sharing status classification on the split matrix.
+
+    The splitting changes ortholog group composition, so within-group
+    consistency and cross-group classifications must be recomputed.
+    """
+    input:
+        split_matrix = GENOTYPING_DIR / "genotype_matrix.split.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES)
+    output:
+        reclassified_matrix = GENOTYPING_DIR / "genotype_matrix.split_verified.tsv",
+        summary = GENOTYPING_DIR / "insertion_fingerprints" / "sharing_summary_split.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/classify_sharing_status.py \
+            --matrix {input.split_matrix} \
+            --fingerprints {input.fingerprints} \
+            --output {output.reclassified_matrix} \
+            --summary {output.summary} \
+            --codon-tolerance {params.codon_tolerance}
+        """
+
+
+rule split_cross_group_mispairs_pass2:
+    """
+    Second-pass splitting for cross-group mispairs that surfaced only after
+    the first reclassify.
+
+    The first pass of `split_overmerged_orthologs` catches within-group
+    over-merges plus any cross-group mispairs visible at the initial
+    classification. But within-group splits create new sub-groups (_split1,
+    _split2) whose cross-group relationship is only determined by the
+    subsequent `reclassify_after_split`. If a within-split sub-group now
+    contains G1 and G2 members at genuinely different sites, it needs
+    another round of cross-group splitting.
+
+    Runs the same splitter script with --cross-group-only, so within-group
+    logic is skipped and only cross_group_reason flagged groups get split.
+    """
+    input:
+        split_verified_matrix = GENOTYPING_DIR / "genotype_matrix.split_verified.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES),
+        beds = expand(
+            BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
+            sample=ALL_SAMPLES),
+        gtfs = expand(
+            ANNOTATIONS_DIR / "{sample}.gtf",
+            sample=ALL_SAMPLES)
+    output:
+        split_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split.tsv",
+        mapping = GENOTYPING_DIR / "insertion_fingerprints" / "cross_split_mapping.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/split_overmerged_orthologs.py \
+            --matrix {input.split_verified_matrix} \
+            --fingerprints {input.fingerprints} \
+            --beds {input.beds} \
+            --gtfs {input.gtfs} \
+            --output {output.split_matrix} \
+            --mapping {output.mapping} \
+            --codon-tolerance {params.codon_tolerance} \
+            --cross-group-only
+        """
+
+
+rule reclassify_after_cross_split:
+    """
+    Re-run sharing-status classification on the post-pass-2 matrix so the
+    new cgsplit sub-groups get `within_group_status = consistent` and
+    `cross_group_status = NA` labels reflecting their clade-specific
+    composition.
+    """
+    input:
+        split_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split.tsv",
+        fingerprints = expand(
+            GENOTYPING_DIR / "insertion_fingerprints" / "{sample}.fingerprints.tsv",
+            sample=ALL_SAMPLES)
+    output:
+        reclassified_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split_verified.tsv",
+        summary = GENOTYPING_DIR / "insertion_fingerprints" / "sharing_summary_cross_split.tsv"
+    params:
+        codon_tolerance = 3
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/classify_sharing_status.py \
+            --matrix {input.split_matrix} \
+            --fingerprints {input.fingerprints} \
+            --output {output.reclassified_matrix} \
+            --summary {output.summary} \
+            --codon-tolerance {params.codon_tolerance}
+        """
+
+
+rule compare_introner_sequences:
+    """
+    Refine within_group_status and cross_group_status using body sequence identity.
+
+    Extracts introner body sequences from indexed genome FASTAs and computes
+    pairwise identity. Overwrites the codon-level status columns with refined
+    values using two thresholds:
+      - within-group identity (default 0.80): resolves uncertain intergenic
+        groups to consistent (if same family + high identity), flags low_identity
+      - cross-group identity (default 0.60): resolves uncertain cross-group
+        cases to likely_ancestral/likely_independent
+
+    Adds audit columns: within_group_identity, cross_group_identity.
+    """
+    input:
+        verified_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split_verified.tsv",
+        genome_indices = expand(
+            ASSEMBLIES_DIR / "{sample}.vg_paths.fa.fai",
+            sample=ALL_SAMPLES)
+    output:
+        seq_verified_matrix = GENOTYPING_DIR / "genotype_matrix.seq_verified.tsv",
+        summary = GENOTYPING_DIR / "insertion_fingerprints" / "sequence_comparison_summary.tsv"
+    params:
+        genome_dir = ASSEMBLIES_DIR,
+        flanking_length = FLANK_LENGTH,
+        within_threshold = 0.80,
+        cross_threshold = 0.60
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/compare_introner_sequences.py \
+            --matrix {input.verified_matrix} \
+            --genome-dir {params.genome_dir} \
+            --output {output.seq_verified_matrix} \
+            --summary {output.summary} \
+            --flanking-length {params.flanking_length} \
+            --within-group-identity-threshold {params.within_threshold} \
+            --cross-group-identity-threshold {params.cross_threshold}
+        """
+
+
 rule annotate_missing_data:
     """
     Annotate missing gene and family data in the genotype matrix.
 
     Strategy:
-    1. Gene annotation (ALL rows): Use bedtools overlap to find genes
+    1. Drop ortholog groups with within_group_status of 'discordant' or
+       'uncertain' (unusable for pi/dxy calculations)
+
+    2. Gene annotation (ALL rows): Use bedtools overlap to find genes
        at each introner's genomic coordinates (works for all scenarios)
 
-    2. Family annotation (Scenario 1 only): Use sequence similarity
+    3. Family annotation (Scenario 1 only): Use sequence similarity
        to match against reference introner families (presence=1 only)
 
     Output: Fully annotated genotype matrix ready for downstream analysis
     """
     input:
-        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.oriented.tsv",
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.seq_verified.tsv",
         gene_beds = [PROCESSED_ANN_DIR / f"{sample}.gene.bed" for sample in ALL_SAMPLES],
         fasta_files = [BLAST_DIR / f"{sample}.candidate_loci.filtered.fa" for sample in ALL_SAMPLES]
     output:

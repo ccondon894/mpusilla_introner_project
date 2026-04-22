@@ -68,6 +68,8 @@ def process_all_samples_orthologs(alignment_dir, classification, flank_length, v
     
     for ortholog_id, info in classification.items():
         category = info["category"]
+        cross_group_status = info.get("cross_group_status", "NA")
+        within_group_status = info.get("within_group_status", "")
         group1_present_count = info["group1_present_count"]
         group1_absent_count = info["group1_absent_count"]
         group2_present_count = info["group2_present_count"]
@@ -156,6 +158,8 @@ def process_all_samples_orthologs(alignment_dir, classification, flank_length, v
             results.append({
                 "ortholog_id": ortholog_id,
                 "category": category,
+                "cross_group_status": cross_group_status,
+                "within_group_status": within_group_status,
                 "group1_present_count": group1_present_count,
                 "group1_absent_count": group1_absent_count,
                 "group2_present_count": group2_present_count,

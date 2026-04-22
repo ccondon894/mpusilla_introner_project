@@ -490,6 +490,22 @@ def main():
     logger.info("Loading genotype matrix...")
     df = pd.read_csv(args.genotype_matrix, sep='\t')
 
+    # Drop ortholog groups with unusable within-group status. discordant
+    # groups have members at multiple distinct insertion sites within a clade
+    # (should have been split but weren't), and uncertain groups have
+    # insufficient data to confirm the ortholog relationship. Neither is
+    # usable for downstream pi/dxy calculations.
+    if 'within_group_status' in df.columns:
+        drop_statuses = {'discordant', 'uncertain'}
+        before_groups = df['ortholog_id'].nunique()
+        before_rows = len(df)
+        df = df[~df['within_group_status'].isin(drop_statuses)].copy()
+        after_groups = df['ortholog_id'].nunique()
+        after_rows = len(df)
+        logger.info(
+            f"Filtered out {before_groups - after_groups} unusable ortholog groups "
+            f"({before_rows - after_rows} rows); {after_groups} groups remain")
+
     logger.info("Loading gene annotations...")
     gene_intervals = load_gene_bed_files(args.processed_ann_dir, samples)
 

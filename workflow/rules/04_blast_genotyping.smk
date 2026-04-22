@@ -191,7 +191,7 @@ rule validate_introner_candidates:
         fa = BLAST_DIR / "{sample}.candidate_loci_plus_flanks.filtered.fa",
         gtf = ANNOTATIONS_DIR / "{sample}.gtf"
     output:
-        fa = BLAST_DIR / "{sample}.candidate_loci.filtered.fa",
+        fa = BLAST_DIR / "{sample}.candidate_loci.validated.fa",
         log1 = BLAST_LOG_DIR / "{sample}.introner_similarity_check.log",
         log2 = BLAST_LOG_DIR / "{sample}.introner_similarity_check_summary.log"
     params:
@@ -210,9 +210,50 @@ rule validate_introner_candidates:
         """
 
 
+rule filter_boundary_spanning_introners:
+    """
+    Filter introner candidates by gene-boundary overlap.
+
+    Rejects candidates whose body spans multiple genes or extends past a
+    single gene's transcript boundary (with a small tolerance for extraction
+    noise). A biologically valid introner should be either fully inside a
+    gene (intronic/exonic/UTR) or fully in an intergenic region.
+
+    Candidates that straddle gene boundaries are most likely false positive
+    BLAST hits where a sequence with moderate similarity to an introner
+    reference happens to align across a gene boundary.
+
+    Each kept candidate gets a 'genomic_context' tag (intra_gene or
+    intergenic) added to its FASTA header. Rejected candidates are logged
+    to a separate file for auditing.
+    """
+    input:
+        fa = BLAST_DIR / "{sample}.candidate_loci.validated.fa",
+        gtf = ANNOTATIONS_DIR / "{sample}.gtf"
+    output:
+        fa = BLAST_DIR / "{sample}.candidate_loci.filtered.fa",
+        rejections = BLAST_LOG_DIR / "{sample}.boundary_rejections.tsv"
+    params:
+        flank_length = 100,
+        tolerance = 5
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/genotyping/filter_boundary_spanning_introners.py \
+            --input {input.fa} \
+            --gtf {input.gtf} \
+            --output {output.fa} \
+            --log {output.rejections} \
+            --flanking-length {params.flank_length} \
+            --tolerance {params.tolerance}
+        """
+
+
 rule create_candidate_bed:
     """
-    Create BED file from validated candidate FASTA
+    Create BED file from the boundary-filtered candidate FASTA.
+
+    Includes a genomic_context column indicating whether the candidate is
+    inside a gene (intra_gene) or in an intergenic region (intergenic).
     """
     input:
         fa = BLAST_DIR / "{sample}.candidate_loci.filtered.fa"
@@ -220,8 +261,8 @@ rule create_candidate_bed:
         bed = BLAST_DIR / "{sample}.candidate_loci.filtered.bed"
     run:
         with open(input.fa, 'r') as f, open(output.bed, 'w') as o:
-            # Basic BED format without TIR/TSD columns
-            o.write("#chrom\tstart\tend\tname\tfamily\tsimilarity\torientation\tgene_info\tsplice_info\n")
+            o.write("#chrom\tstart\tend\tname\tfamily\tsimilarity\torientation\t"
+                    "gene_info\tsplice_info\tgenomic_context\n")
 
             for line in f:
                 if line.startswith(">"):
@@ -248,8 +289,10 @@ rule create_candidate_bed:
                         orientation = metadata_dict.get('orientation', 'NA')
                         gene_info = metadata_dict.get('gene', 'NA')
                         splice_info = metadata_dict.get('splice_sites', metadata_dict.get('splice_site', 'NA'))
+                        genomic_context = metadata_dict.get('genomic_context', 'NA')
 
-                        o.write(f"{chrom}\t{start}\t{end}\t{identifier}\t{family}\t{similarity}\t{orientation}\t{gene_info}\t{splice_info}\n")
+                        o.write(f"{chrom}\t{start}\t{end}\t{identifier}\t{family}\t{similarity}\t"
+                                f"{orientation}\t{gene_info}\t{splice_info}\t{genomic_context}\n")
 
                     except (ValueError, IndexError) as e:
                         print(f"Warning: Error processing FASTA header: {line}")
