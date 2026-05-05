@@ -120,11 +120,11 @@ if LOAD_GENOTYPING or LOAD_EVOLUTION or LOAD_SNP or LOAD_EXPRESSION:
 # Evolution analysis (Iteration 2)
 if LOAD_EVOLUTION:
     include: "rules/10_evolution_analysis.smk"
-    include: "rules/11_haplotype_diversity.smk"
     include: "rules/12_genome_alignment_circos.smk"
     include: "rules/13_non_introner_introns.smk"
     include: "rules/14_introner_positional_analysis.smk"
     include: "rules/15_shared_introner_divergence.smk"
+    include: "rules/16_sfs_inference.smk"
 
 # SNP population genetics (Iteration 3)
 if LOAD_SNP:
