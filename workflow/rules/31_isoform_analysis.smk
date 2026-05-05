@@ -90,7 +90,7 @@ rule diversity_by_introner_status:
     """
     input:
         diversity = DIVERSITY_DIR / "shannon_diversity_per_gene.csv",
-        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.tsv"
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
         comparison = DIVERSITY_DIR / "diversity_by_introner_status.csv",
         plot = FIGURES_DIR / "diversity_introner_comparison.pdf",
@@ -119,7 +119,7 @@ rule create_introner_loci_bed:
     Extract CCMP1545 introner loci from genotype matrix into BED format.
     """
     input:
-        matrix = GENOTYPING_DIR / "genotype_matrix.tsv"
+        matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
         bed = GENOTYPING_DIR / "introner_loci.bed"
     run:
@@ -254,7 +254,7 @@ rule prepare_isoform_data:
     """
     input:
         isoform_counts = ISOFORM_DIR / "isoform_counts_per_gene.csv",
-        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.tsv",
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
         counts_matrix = COUNTS_DIR / "merged_counts_matrix.csv"
     output:
