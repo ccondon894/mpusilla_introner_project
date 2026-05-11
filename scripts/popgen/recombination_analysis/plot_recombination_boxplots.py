@@ -378,9 +378,11 @@ Examples:
                        help='Overlay strip plots under box plots to show individual data points')
     parser.add_argument('-o', '--output', type=str, default='recombination_boxplots_comparison',
                        help='Output filename prefix (without extension). Default: recombination_boxplots_comparison')
+    parser.add_argument('--base_dir', type=str, default='./',
+                       help='Directory containing the gene_exonic_*_windows.tsv input files (default: ./)')
     args = parser.parse_args()
 
-    base_dir = './'
+    base_dir = args.base_dir
 
     # Load data
     print("📊 Loading Group 1 data...")

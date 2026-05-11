@@ -1,0 +1,21 @@
+name: popgen
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - pysam
+  - biopython
+  - adjustText
+  - bcftools
+  - htslib       # provides bgzip, tabix
+  - bedtools
+  - plink
+  - degenotate
+  - pip

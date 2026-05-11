@@ -89,6 +89,8 @@ def collect_data(result_dir, families, window_sizes):
 
 def plot_correlations(data, output_file, window_sizes):
     """Create a publication-quality plot of correlation coefficients across families."""
+    import math
+
     if not data:
         print("Error: No data to plot!", file=sys.stderr)
         sys.exit(1)
@@ -106,6 +108,9 @@ def plot_correlations(data, output_file, window_sizes):
     _, ax = plt.subplots(figsize=(12, 7), dpi=300)
 
     for family, family_data in sorted(data.items()):
+        if family in {'14', '15', '4'}:
+            continue # skipping because not enough data points 
+            
         ws = family_data['window_sizes']
         corr = family_data['correlations']
 
@@ -124,7 +129,6 @@ def plot_correlations(data, output_file, window_sizes):
     ax.set_xticklabels([str(ws) for ws in window_sizes])
 
     # Dynamic y-axis limits based on data (filter NaN from constant-value correlations)
-    import math
     all_corrs = [c for fd in data.values() for c in fd['correlations'] if not math.isnan(c)]
     if all_corrs:
         y_max = max(max(all_corrs) * 1.15, 0.1)
@@ -134,13 +138,11 @@ def plot_correlations(data, output_file, window_sizes):
     ax.set_ylim(y_min, y_max)
     ax.set_xlim(0, max(window_sizes) + 5)
 
-    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
-
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    # ax.spines['top'].set_visible(False)
+    # ax.spines['right'].set_visible(False)
     ax.tick_params(labelsize=10)
 
-    ax.legend(loc='upper left', fontsize=11, framealpha=0.95, edgecolor='black')
+    ax.legend(loc='upper left', fontsize=11, framealpha=0.95, edgecolor='black', )
 
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches='tight')

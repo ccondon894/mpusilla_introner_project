@@ -67,6 +67,7 @@ rule run_degenotate:
         degeneracy_level = 4
     log:
         SNP_LOG_DIR / "degenotate.log"
+    conda: "../envs/popgen.yaml"
     shell:
         """
         mkdir -p {params.outdir}
@@ -100,6 +101,7 @@ rule extract_snps:
         vcf = VCF_DIR / "mpusilla.joint.vcf.gz"
     output:
         vcf = VCF_DIR / "mpusilla.snps.vcf.gz"
+    conda: "../envs/popgen.yaml"
     shell:
         """
         (
@@ -121,6 +123,7 @@ rule add_reference_sample:
         awk_script = PROJECT_ROOT / "scripts" / "popgen" / "insert_reference.awk"
     output:
         vcf = VCF_DIR / "mpusilla.snps.with_ref.vcf.gz"
+    conda: "../envs/popgen.yaml"
     shell:
         """
         gzip -dc {input.vcf} | {input.awk_script} | gzip > {output.vcf}
@@ -141,6 +144,7 @@ rule extract_4fold_sites:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"
     params:
         exclude_scaffold = EXCLUDED_SCAFFOLD
+    conda: "../envs/popgen.yaml"
     shell:
         """
         python {input.script} \
@@ -165,6 +169,7 @@ rule create_intronerful_subset:
         # Build column selection string for Group1 samples
         # First 9 columns are VCF format, then samples
         samples = ",".join(GROUP1_SAMPLES)
+    conda: "../envs/popgen.yaml"
     shell:
         """
         # Get header
@@ -192,13 +197,11 @@ rule filter_no_missing_data:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.nomissing.vcf.gz"
     params:
         # For haploid, AN should equal number of samples
-        expected_an = len(ALL_SAMPLES)
+        expected_an = len(ALL_SAMPLES) - 1 # Minus 1 because we added CCMP1545 back in post-hoc
+    conda: "../envs/popgen.yaml"
     shell:
         """
-        (
-            gzip -dc {input.vcf} | grep -e '^#'
-            gzip -dc {input.vcf} | grep -v '^#' | grep 'AN={params.expected_an}'
-        ) | gzip > {output.vcf}
+            bcftools view -e 'INFO/AN<{params.expected_an}' -O z -o {output.vcf} {input.vcf} 
         """
 
 
@@ -212,6 +215,7 @@ rule create_group1_subset:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.group1.vcf.gz"
     params:
         samples = ",".join(GROUP1_SAMPLES)
+    conda: "../envs/popgen.yaml"
     shell:
         """
         bcftools view -s {params.samples} {input.vcf} | bgzip > {output.vcf}
@@ -235,7 +239,9 @@ rule build_snpeff_database:
         done = SNPEFF_DIR / "snpeff_db.done"
     params:
         db_name = "CCMP1545_v3",
-        data_dir = SNPEFF_DIR / "data"
+        data_dir = SNPEFF_DIR / "data",
+        config = SNPEFF_DIR / "snpEff.config",
+    conda: "../envs/snpeff.yaml"
     log:
         SNP_LOG_DIR / "snpeff_build.log"
     shell:
@@ -245,9 +251,14 @@ rule build_snpeff_database:
         # Copy files with required names
         cp {input.genome} {params.data_dir}/{params.db_name}/sequences.fa
         cp {input.gtf} {params.data_dir}/{params.db_name}/genes.gtf
-
+            
+        # Write a minimal snpEff config
+cat > {params.config} <<EOF
+data.dir = {params.data_dir}/
+{params.db_name}.genome : Micromonas pusilla CCMP1545
+EOF
         # Build database
-        snpEff build -gtf22 -v {params.db_name} -dataDir {params.data_dir} 2> {log}
+        snpEff build -gtf22 -v -noCheckCds -noCheckProtein -c {params.config} {params.db_name} 2> {log}
 
         touch {output.done}
         """
@@ -258,28 +269,28 @@ rule run_snpeff:
     Annotate SNPs with functional effects using SnpEff.
     """
     input:
-        vcf = VCF_DIR / "mpusilla.snps.vcf.gz",
+        vcf = VCF_DIR / "mpusilla.snps.with_ref.vcf.gz",
         db_done = SNPEFF_DIR / "snpeff_db.done"
     output:
         vcf = SNPEFF_DIR / "mpusilla.snps.snpEff.vcf",
         html = SNPEFF_DIR / "snpEff_summary.html",
-        genes = SNPEFF_DIR / "snpEff_genes.txt"
+        genes = SNPEFF_DIR / "snpEff_summary.genes.txt"
     params:
         db_name = "CCMP1545_v3",
-        data_dir = SNPEFF_DIR / "data"
+        data_dir = SNPEFF_DIR / "data",
+        config = SNPEFF_DIR / "snpEff.config",
+    conda: "../envs/snpeff.yaml"
     log:
         SNP_LOG_DIR / "snpeff_annotate.log"
     shell:
         """
         gzip -dc {input.vcf} | \
         snpEff ann \
-            -v {params.db_name} \
-            -dataDir {params.data_dir} \
+            -v -c {params.config} \
             -stats {output.html} \
+            {params.db_name} \
             > {output.vcf} \
             2> {log}
-
-        mv snpEff_genes.txt {output.genes} 2>/dev/null || true
         """
 
 
@@ -299,6 +310,7 @@ rule summarize_site_classes:
         exclude_scaffold = EXCLUDED_SCAFFOLD
     log:
         SNP_LOG_DIR / "site_class_summary.log"
+    conda: "../envs/popgen.yaml"
     shell:
         """
         python {input.script} \
@@ -320,6 +332,7 @@ rule filter_snpeff_no_mt:
         vcf = SNPEFF_DIR / "mpusilla.snps.snpEff.no_MT.vcf"
     params:
         exclude_scaffold = EXCLUDED_SCAFFOLD
+    conda: "../envs/popgen.yaml"
     shell:
         """
         grep -v '{params.exclude_scaffold}' {input.vcf} > {output.vcf}

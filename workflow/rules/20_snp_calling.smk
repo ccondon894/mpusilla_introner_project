@@ -72,6 +72,7 @@ rule snp_index_reference:
         ref_copy = VCF_DIR / "reference" / "CCMP1545_v3.fa"
     log:
         SNP_LOG_DIR / "index_reference.log"
+    conda: "../envs/gatk.yaml"
     shell:
         """
         mkdir -p {VCF_DIR}/reference
@@ -103,6 +104,7 @@ rule add_read_groups:
         RGSM = "{sample}"
     log:
         SNP_LOG_DIR / "add_read_groups" / "{sample}.log"
+    conda: "../envs/gatk.yaml"
     shell:
         """
         mkdir -p {VCF_DIR}/bams
@@ -127,6 +129,7 @@ rule index_rg_bam:
         bam = VCF_DIR / "bams" / "{sample}.rg.bam"
     output:
         bai = VCF_DIR / "bams" / "{sample}.rg.bam.bai"
+    conda: "../envs/gatk.yaml"
     shell:
         """
         samtools index {input.bam}
@@ -158,6 +161,7 @@ rule haplotype_caller_gvcf:
     threads: 4
     log:
         SNP_LOG_DIR / "haplotype_caller" / "{sample}.log"
+    conda: "../envs/gatk.yaml"
     shell:
         """
         mkdir -p {GVCF_DIR}
@@ -187,6 +191,7 @@ rule combine_gvcfs:
     threads: 4
     log:
         SNP_LOG_DIR / "combine_gvcfs.log"
+    conda: "../envs/gatk.yaml"
     shell:
         """
         gatk CombineGVCFs \
@@ -212,6 +217,7 @@ rule joint_genotyping:
     threads: 8
     log:
         SNP_LOG_DIR / "joint_genotyping.log"
+    conda: "../envs/gatk.yaml"
     shell:
         """
         gatk GenotypeGVCFs \
@@ -237,6 +243,7 @@ rule joint_genotyping_all_sites:
     threads: 8
     log:
         SNP_LOG_DIR / "joint_genotyping_all_sites.log"
+    conda: "../envs/gatk.yaml"
     shell:
         """
         gatk GenotypeGVCFs \

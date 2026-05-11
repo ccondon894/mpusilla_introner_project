@@ -1,0 +1,17 @@
+name: dadi
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - dadi
+  - demes
+  - demesdraw
+  - numpy
+  - scipy
+  - matplotlib
+  - pandas
+  - nlopt
+  - pip
+  - pysam
+  - seaborn

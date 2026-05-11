@@ -1,0 +1,14 @@
+name: moments
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - pip
+  - pip:
+      - moments-popgen

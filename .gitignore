@@ -8,7 +8,9 @@ resources/
 # ============================================================
 # Conda environments and external tools
 # ============================================================
-workflow/envs/
+# Ignore materialized env directories (e.g., workflow/envs/dadi-env/) but
+# keep the .yaml specs tracked so --use-conda rules are reproducible.
+workflow/envs/*/
 workflow/tools/*
 !workflow/tools/introner-caller
 
