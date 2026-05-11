@@ -29,6 +29,8 @@ def parse_args():
                    help="Comma-separated list of subset names to compare")
     p.add_argument("--out_tsv", required=True)
     p.add_argument("--out_png", required=True)
+    p.add_argument("--out_ratio_png", required=True,
+                   help="Per-locus loss/gain rate ratio figure (introner / non_introner)")
     return p.parse_args()
 
 
@@ -56,14 +58,20 @@ def collect(base):
     seg = sfs_full[1:n]
     fixed_P = int(intr["fixed_present"])
     fixed_A = int(intr["fixed_absent"])
+    n_loci = int(intr["n_loci_called"])
+    theta_lambda = float(theta["theta_lambda"])
+    theta_mu = float(theta["theta_mu"])
     return {
         "n": n,
         "n_segregating": int(seg.sum()),
         "fixed_present": fixed_P,
         "fixed_absent": fixed_A,
         "fixed_P_over_A": (fixed_P / fixed_A) if fixed_A > 0 else float("inf"),
-        "theta_lambda": float(theta["theta_lambda"]),
-        "theta_mu": float(theta["theta_mu"]),
+        "n_loci_called": n_loci,
+        "theta_lambda": theta_lambda,
+        "theta_mu": theta_mu,
+        "lambda_per_locus": theta_lambda / n_loci if n_loci > 0 else float("nan"),
+        "mu_per_locus": theta_mu / n_loci if n_loci > 0 else float("nan"),
         "ratio": float(theta["theta_ratio_lambda_over_mu"]),
         "GoF_G": G,
         "GoF_p": pval,
@@ -91,6 +99,7 @@ def main():
                 "subset": subset,
                 "locus_class": cls,
                 "n": d["n"],
+                "n_loci_called": d["n_loci_called"],
                 "n_segregating": d["n_segregating"],
                 "fixed_present": d["fixed_present"],
                 "fixed_absent": d["fixed_absent"],
@@ -100,6 +109,8 @@ def main():
                 ),
                 "theta_lambda": round(d["theta_lambda"], 4),
                 "theta_mu": round(d["theta_mu"], 4),
+                "lambda_per_locus": round(d["lambda_per_locus"], 6),
+                "mu_per_locus": round(d["mu_per_locus"], 6),
                 "ratio": round(d["ratio"], 4),
                 "GoF_G": round(d["GoF_G"], 2),
                 "GoF_p": f"{d['GoF_p']:.3g}",
@@ -108,6 +119,59 @@ def main():
     df = pd.DataFrame(rows)
     df.to_csv(args.out_tsv, sep="\t", index=False)
     print(df.to_string(index=False))
+
+    # ---- Per-locus rate ratio plot --------------------------------------
+    # Tests the hypothesis that introner loss shares a mechanism with regular
+    # intron loss (loss-rate ratio ~ 1) while introner gain is its own process
+    # (gain-rate ratio >> 1).
+    fig_r, axes_r = plt.subplots(1, 2, figsize=(11, 4.5))
+    x = np.arange(len(subsets))
+
+    loss_ratios = []
+    gain_ratios = []
+    for s in subsets:
+        intr = data[(s, "introner")]
+        nintr = data[(s, "non_introner_intron")]
+        loss_ratios.append(
+            intr["mu_per_locus"] / nintr["mu_per_locus"]
+            if nintr["mu_per_locus"] > 0 else float("nan")
+        )
+        gain_ratios.append(
+            intr["lambda_per_locus"] / nintr["lambda_per_locus"]
+            if nintr["lambda_per_locus"] > 0 else float("nan")
+        )
+
+    # Panel A: per-locus loss rate ratio
+    ax = axes_r[0]
+    ax.bar(x, loss_ratios, color="tab:red", edgecolor="black", alpha=0.8)
+    ax.axhline(1.0, color="black", lw=1, ls="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(subsets, rotation=20, fontsize=9)
+    ax.set_ylabel(r"$\mu_{\rm introner}\,/\,\mu_{\rm non-introner}$ (per locus)")
+    ax.set_title("Per-locus loss rate: introner / non-introner")
+    for i, r in enumerate(loss_ratios):
+        if np.isfinite(r):
+            ax.text(i, r, f"{r:.2f}", ha="center", va="bottom", fontsize=9)
+
+    # Panel B: per-locus gain rate ratio
+    ax = axes_r[1]
+    ax.bar(x, gain_ratios, color="tab:green", edgecolor="black", alpha=0.8)
+    ax.axhline(1.0, color="black", lw=1, ls="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(subsets, rotation=20, fontsize=9)
+    ax.set_ylabel(r"$\lambda_{\rm introner}\,/\,\lambda_{\rm non-introner}$ (per locus)")
+    ax.set_title("Per-locus gain rate: introner / non-introner")
+    for i, r in enumerate(gain_ratios):
+        if np.isfinite(r):
+            ax.text(i, r, f"{r:.2f}", ha="center", va="bottom", fontsize=9)
+
+    fig_r.suptitle(
+        "Decomposing introner dynamics: shared loss vs. introner-specific gain",
+        fontsize=12, y=1.02,
+    )
+    fig_r.tight_layout()
+    fig_r.savefig(args.out_ratio_png, dpi=200, bbox_inches="tight")
+    plt.close(fig_r)
 
     # ---- 4-panel plot ----------------------------------------------------
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
@@ -214,7 +278,7 @@ def main():
     fig.tight_layout()
     fig.savefig(args.out_png, dpi=200, bbox_inches="tight")
     plt.close(fig)
-    print(f"\nWrote {args.out_tsv}, {args.out_png}")
+    print(f"\nWrote {args.out_tsv}, {args.out_png}, {args.out_ratio_png}")
 
 
 if __name__ == "__main__":

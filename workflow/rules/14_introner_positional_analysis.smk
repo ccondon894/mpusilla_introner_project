@@ -46,8 +46,7 @@ rule introner_positional_all:
     analyses of introner density across window scales.
     """
     input:
-        INTRONER_POS_FIGURES / "inter_genome_window_scale_correlation.png",
-        INTRONER_POS_FIGURES / "intra_genome_window_scale_correlation.png"
+        INTRONER_POS_FIGURES / "inter_genome_window_scale_correlation.png"
 
 
 # ============================================================================
@@ -147,37 +146,5 @@ rule intra_genome_spearman_correlation:
             {params.exclude_fixed} \
             --output {output.json_out} \
             --plot {output.plot_out} \
-            2>&1 | tee {log}
-        """
-
-
-rule plot_intra_genome_window_scale:
-    """Summary line plot of intra-genome family correlation across window scales."""
-    input:
-        jsons = expand(
-            INTRONER_POS_DIR / "intra_genome" / "spearman_{genome}_{f1}_vs_{f2}_{wk}kb.json",
-            genome=INTRA_GENOMES,
-            f1=[p[0] for p in INTRA_FAMILY_PAIRS],
-            f2=[p[1] for p in INTRA_FAMILY_PAIRS],
-            wk=WINDOW_SIZES_KB
-        )
-    output:
-        INTRONER_POS_FIGURES / "intra_genome_window_scale_correlation.png"
-    params:
-        result_dir = str(INTRONER_POS_DIR / "intra_genome"),
-        genomes = ' '.join(INTRA_GENOMES),
-        window_sizes = ' '.join(str(w) for w in WINDOW_SIZES_KB),
-        family_pairs = ' '.join(f"{p[0]}_{p[1]}" for p in INTRA_FAMILY_PAIRS)
-    log:
-        INTRONER_POS_DIR / "logs" / "plot_intra_genome_window_scale.log"
-    shell:
-        """
-        mkdir -p $(dirname {output}) $(dirname {log}) && \
-        python3 {IP_SCRIPTS}/plot_intra_genome_family_correlation.py \
-            --result-dir {params.result_dir} \
-            --genomes {params.genomes} \
-            --family-pairs {params.family_pairs} \
-            --window-sizes {params.window_sizes} \
-            --output {output} \
             2>&1 | tee {log}
         """

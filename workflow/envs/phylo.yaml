@@ -1,0 +1,15 @@
+name: phylo
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - iqtree  
+  - ete3
+  - toytree
+  - toyplot
+  - numpy
+  - pandas
+  - matplotlib
+  - biopython
+  - pip

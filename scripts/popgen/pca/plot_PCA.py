@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from adjustText import adjust_text
 
-def plot_pca(eigenval_file, eigenvec_file, output_file, group2_samples):
+def plot_pca(eigenval_file, eigenvec_file, output_pdf, output_png, group2_samples):
     # Load the data
     eigenvals = pd.read_csv(eigenval_file, header=None, names=['eigenval'])
     eigenvecs = pd.read_csv(eigenvec_file, sep=r'\s+', header=None)
@@ -55,7 +55,9 @@ def plot_pca(eigenval_file, eigenvec_file, output_file, group2_samples):
     ax1.grid(True, alpha=0.3)
     ax2.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    plt.savefig(output_pdf, dpi=300, bbox_inches='tight', format="pdf")
+    plt.savefig(output_png, dpi=300, bbox_inches='tight', format="png")
+
 
     print(f"Total samples: {len(samples)}")
     print(f"Group2 samples found: {sum(1 for sample in samples if sample in group2_samples)}")
@@ -68,10 +70,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Plot PCA from PLINK eigenval/eigenvec files.')
     parser.add_argument('--eigenval', required=True, help='Path to .eigenval file')
     parser.add_argument('--eigenvec', required=True, help='Path to .eigenvec file')
-    parser.add_argument('--output', required=True, help='Output plot path (extension determines format)')
+    parser.add_argument('--output_pdf', required=True, help='Output plot path (extension determines format)')
+    parser.add_argument('--output_png', required=True, help='Output plot path (extension determines format)')
     parser.add_argument('--group1', required=True, help='Comma-separated Group1 sample names')
     parser.add_argument('--group2', required=True, help='Comma-separated Group2 sample names')
     args = parser.parse_args()
 
     group2_samples = set(args.group2.split(','))
-    plot_pca(args.eigenval, args.eigenvec, args.output, group2_samples)
+    plot_pca(args.eigenval, args.eigenvec, args.output_pdf, args.output_png, group2_samples)

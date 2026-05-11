@@ -55,6 +55,7 @@ rule vcf_to_phylip:
         output_prefix = "mpusilla.snps.4d"
     log:
         PHYLO_LOG_DIR / "vcf2phylip.log"
+    conda: "../envs/phylo.yaml"
     shell:
         """
         mkdir -p {PHYLO_DIR}
@@ -79,17 +80,22 @@ rule vcf_to_phylip_nomissing:
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.nomissing.vcf.gz"
     output:
-        phylip = PHYLO_DIR / "mpusilla.snps.4d.nomissing.phy",
-        fasta = PHYLO_DIR / "mpusilla.snps.4d.nomissing.fasta"
+        phylip = PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.phy",
+        fasta = PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.fasta"
     params:
-        prefix = PHYLO_DIR / "mpusilla.snps.4d.nomissing"
+        output_prefix = PHYLO_DIR / "mpusilla.snps.4d.nomissing",
+        min_samples = 4,
+        output_folder = PHYLO_DIR,
     log:
         PHYLO_LOG_DIR / "vcf2phylip_nomissing.log"
+    conda: "../envs/phylo.yaml"
     shell:
         """
         python {PROJECT_ROOT}/scripts/popgen/iqtree/vcf2phylip.py \
             -i {input.vcf} \
-            -o {params.prefix} \
+            --output-folder {params.output_folder} \
+            --output-prefix {params.output_prefix} \
+            --min-samples-locus {params.min_samples} \
             --fasta \
             2> {log}
         """
@@ -116,9 +122,10 @@ rule run_iqtree:
         model = "GTR+ASC",  # GTR with ascertainment bias correction for SNPs
         bootstrap = IQTREE_BOOTSTRAP,
         prefix = PHYLO_DIR / "mpusilla.snps.4d.min4.phy"
-    threads: 4
+    threads: 8
     log:
         PHYLO_LOG_DIR / "iqtree.log"
+    conda: "../envs/phylo.yaml"
     shell:
         """
         iqtree2 \
@@ -137,17 +144,18 @@ rule run_iqtree_nomissing:
     Run IQ-TREE on complete-data alignment.
     """
     input:
-        phylip = PHYLO_DIR / "mpusilla.snps.4d.nomissing.phy"
+        phylip = PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.phy"
     output:
-        treefile = PHYLO_DIR / "mpusilla.snps.4d.nomissing.phy.treefile",
-        iqtree = PHYLO_DIR / "mpusilla.snps.4d.nomissing.phy.iqtree"
+        treefile = PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.phy.treefile",
+        iqtree = PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.phy.iqtree"
     params:
         model = "GTR+ASC",
         bootstrap = IQTREE_BOOTSTRAP,
-        prefix = PHYLO_DIR / "mpusilla.snps.4d.nomissing.phy"
+        prefix = PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.phy"
     threads: 4
     log:
         PHYLO_LOG_DIR / "iqtree_nomissing.log"
+    conda: "../envs/phylo.yaml"
     shell:
         """
         iqtree2 \
@@ -178,17 +186,18 @@ rule plot_phylogenetic_tree:
     input:
         treefile = PHYLO_DIR / "mpusilla.snps.4d.rooted.treefile"
     output:
-        pdf = FIGURES_DIR / "phylogenetic_tree.pdf",
-        png = FIGURES_DIR / "phylogenetic_tree.png"
+        pdf = FIGURES_DIR / "snp_popgen"  / "phylogenetic_tree.pdf",
+        png = FIGURES_DIR / "snp_popgen"  / "phylogenetic_tree.png"
     log:
         PHYLO_LOG_DIR / "plot_tree.log"
+    conda: "../envs/phylo.yaml"
     shell:
         """
-        mkdir -p {FIGURES_DIR}
+        mkdir -p {FIGURES_DIR}/snp_popgen
 
         python {PROJECT_ROOT}/scripts/popgen/iqtree/plot_tree_improved.py \
             -i {input.treefile} \
-            -o {FIGURES_DIR}/phylogenetic_tree \
+            -o {FIGURES_DIR}/snp_popgen/phylogenetic_tree \
             2> {log}
         """
 
@@ -205,6 +214,7 @@ rule reroot_tree:
         rooted = PHYLO_DIR / "mpusilla.snps.4d.rooted.treefile"
     params:
         outgroup = " ".join(GROUP2_SAMPLES)  # Both RCC1749 and RCC3052
+    conda: "../envs/phylo.yaml"
     shell:
         """
         # Use nw_reroot from newick-utils if available, otherwise Python
@@ -237,9 +247,9 @@ rule phylogenetics_complete:
     """
     input:
         PHYLO_DIR / "mpusilla.snps.4d.min4.phy.treefile",
-        PHYLO_DIR / "mpusilla.snps.4d.nomissing.phy.treefile",
+        PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.phy.treefile",
         PHYLO_DIR / "mpusilla.snps.4d.rooted.treefile",
-        FIGURES_DIR / "phylogenetic_tree.pdf"
+        FIGURES_DIR / "snp_popgen" / "phylogenetic_tree.pdf"
 
 
 rule iqtree_only:
@@ -255,5 +265,5 @@ rule tree_plots_only:
     Target: Generate tree plots only.
     """
     input:
-        FIGURES_DIR / "phylogenetic_tree.pdf",
-        FIGURES_DIR / "phylogenetic_tree.png"
+        FIGURES_DIR / "snp_popgen" / "phylogenetic_tree.pdf",
+        FIGURES_DIR / "snp_popgen"  / "snp_popgen"  / "phylogenetic_tree.png"

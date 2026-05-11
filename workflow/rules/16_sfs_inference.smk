@@ -326,6 +326,7 @@ rule sfs_compare_introner_vs_non_introner:
     output:
         tsv = SFS_DIR / "comparison" / "introner_vs_non_introner.tsv",
         png = FIGURES_DIR / "introner_vs_non_introner_sfs.png",
+        ratio_png = FIGURES_DIR / "introner_vs_non_introner_per_locus_rates.png",
     params:
         root = lambda wc, output: str(Path(output.tsv).parent.parent),
         subsets = ",".join(SFS_SUBSETS.keys()),
@@ -338,7 +339,8 @@ rule sfs_compare_introner_vs_non_introner:
             --root {params.root} \\
             --subsets {params.subsets} \\
             --out_tsv {output.tsv} \\
-            --out_png {output.png}
+            --out_png {output.png} \\
+            --out_ratio_png {output.ratio_png}
         """
 
 
@@ -420,6 +422,7 @@ rule sfs_inference_all:
     input:
         comparison_tsv = SFS_DIR / "comparison" / "introner_vs_non_introner.tsv",
         comparison_png = FIGURES_DIR / "introner_vs_non_introner_sfs.png",
+        per_locus_rate_png = FIGURES_DIR / "introner_vs_non_introner_per_locus_rates.png",
         validations = expand(
             str(SFS_DIR / "{sfs_subset}" / "demography_validation.tsv"),
             sfs_subset=list(SFS_SUBSETS.keys()),
