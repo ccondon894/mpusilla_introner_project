@@ -26,6 +26,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import glob
+from pathlib import Path
+
+
+def save_plot_bundle(output_prefix):
+    """Save the current figure as PDF and PNG using the shared prefix."""
+    prefix = Path(output_prefix)
+    plt.savefig(prefix.with_suffix(".pdf"), dpi=300, bbox_inches='tight')
+    plt.savefig(prefix.with_suffix(".png"), dpi=300, bbox_inches='tight')
 
 
 def load_gtf(gtf_file):
@@ -582,9 +590,8 @@ def main():
     plt.suptitle(f'Gene-Exonic Recombination Analysis\n{args.window_size}bp windows, {args.merge_distance}bp merge distance',
                  fontsize=13, fontweight='bold', y=1.00)
     plt.tight_layout()
-    plot_file = f"{args.output_prefix}.pdf"
-    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-    print(f"💾 Saved plot to {plot_file}")
+    save_plot_bundle(args.output_prefix)
+    print(f"Saved plots to {Path(args.output_prefix).with_suffix('.pdf')} and {Path(args.output_prefix).with_suffix('.png')}")
 
     print("\n✅ Analysis complete!")
 

@@ -30,11 +30,38 @@ from matplotlib.backends.backend_pdf import PdfPages
 import re
 from collections import defaultdict
 from scipy.stats import fisher_exact
+from pathlib import Path
 
 
 # ============================================================
 # CORE ANALYSIS FUNCTIONS (preserved from original)
 # ============================================================
+
+def save_figures_with_png(figures, output_path):
+    """Write a multi-page PDF and a single PNG contact sheet of the same figures."""
+    output_path = Path(output_path)
+    with PdfPages(output_path) as pdf:
+        for fig in figures:
+            pdf.savefig(fig)
+
+    if output_path.suffix.lower() == ".pdf" and figures:
+        rendered = []
+        for fig in figures:
+            fig.canvas.draw()
+            rendered.append(np.asarray(fig.canvas.buffer_rgba()))
+
+        summary_fig, axes = plt.subplots(
+            len(rendered),
+            1,
+            figsize=(10, max(4, 3.5 * len(rendered))),
+            squeeze=False,
+        )
+        for ax, image in zip(axes.flatten(), rendered):
+            ax.imshow(image)
+            ax.axis("off")
+        summary_fig.tight_layout()
+        summary_fig.savefig(output_path.with_suffix(".png"), dpi=300, bbox_inches="tight")
+        plt.close(summary_fig)
 
 def parse_gtf_file(gtf_path):
     """Parse GTF file and extract gene exon coordinates."""
@@ -308,34 +335,32 @@ def run_default_mode(args):
     })
     contingency.to_csv(args.contingency, index=False)
 
-    # Generate PDF plot
-    with PdfPages(args.plot) as pdf:
-        fig, ax = plt.subplots(figsize=(8, 6))
-        x = np.arange(2)
-        width = 0.35
-        ax.bar(x - width/2,
-               [result['nmd_true_with'], result['nmd_false_with']],
-               width, label='With Introners', color='#e74c3c', alpha=0.8)
-        ax.bar(x + width/2,
-               [result['nmd_true_without'], result['nmd_false_without']],
-               width, label='Without Introners', color='#3498db', alpha=0.8)
-        ax.set_xlabel('NMD Prediction', fontsize=12)
-        ax.set_ylabel('Count', fontsize=12)
-        ax.set_title('NMD Status by Introner Presence', fontsize=14,
-                     fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(['NMD+', 'NMD-'])
-        ax.legend()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    x = np.arange(2)
+    width = 0.35
+    ax.bar(x - width/2,
+           [result['nmd_true_with'], result['nmd_false_with']],
+           width, label='With Introners', color='#e74c3c', alpha=0.8)
+    ax.bar(x + width/2,
+           [result['nmd_true_without'], result['nmd_false_without']],
+           width, label='Without Introners', color='#3498db', alpha=0.8)
+    ax.set_xlabel('NMD Prediction', fontsize=12)
+    ax.set_ylabel('Count', fontsize=12)
+    ax.set_title('NMD Status by Introner Presence', fontsize=14,
+                 fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(['NMD+', 'NMD-'])
+    ax.legend()
 
-        p = result['fisher']['p_value']
-        or_val = result['fisher']['odds_ratio']
-        ax.text(0.95, 0.95, f"OR={or_val:.2f}\np={p:.2e}",
-                transform=ax.transAxes, ha='right', va='top',
-                fontsize=10, bbox=dict(boxstyle='round', facecolor='wheat'))
+    p = result['fisher']['p_value']
+    or_val = result['fisher']['odds_ratio']
+    ax.text(0.95, 0.95, f"OR={or_val:.2f}\np={p:.2e}",
+            transform=ax.transAxes, ha='right', va='top',
+            fontsize=10, bbox=dict(boxstyle='round', facecolor='wheat'))
 
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.close()
+    fig.tight_layout()
+    save_figures_with_png([fig], args.plot)
+    plt.close(fig)
 
     print(f"NMD analysis complete. Report: {args.output}")
 
@@ -376,27 +401,25 @@ def run_by_strain_mode(args):
     with open(args.output, 'w') as f:
         f.write(report)
 
-    # Generate PDF comparison plot
-    with PdfPages(args.plot) as pdf:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        strains = [r['label'] for r in results]
-        nmd_pos = [r['count_nmd_positive'] for r in results]
-        nmd_neg = [r['count_nmd_negative'] for r in results]
+    fig, ax = plt.subplots(figsize=(10, 6))
+    strains = [r['label'] for r in results]
+    nmd_pos = [r['count_nmd_positive'] for r in results]
+    nmd_neg = [r['count_nmd_negative'] for r in results]
 
-        x = np.arange(len(strains))
-        width = 0.35
-        ax.bar(x - width/2, nmd_pos, width, label='NMD+', color='#e74c3c', alpha=0.8)
-        ax.bar(x + width/2, nmd_neg, width, label='NMD-', color='#2ecc71', alpha=0.8)
-        ax.set_xlabel('Strain', fontsize=12)
-        ax.set_ylabel('Count', fontsize=12)
-        ax.set_title('NMD Predictions by Strain', fontsize=14, fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(strains)
-        ax.legend()
+    x = np.arange(len(strains))
+    width = 0.35
+    ax.bar(x - width/2, nmd_pos, width, label='NMD+', color='#e74c3c', alpha=0.8)
+    ax.bar(x + width/2, nmd_neg, width, label='NMD-', color='#2ecc71', alpha=0.8)
+    ax.set_xlabel('Strain', fontsize=12)
+    ax.set_ylabel('Count', fontsize=12)
+    ax.set_title('NMD Predictions by Strain', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(strains)
+    ax.legend()
 
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.close()
+    fig.tight_layout()
+    save_figures_with_png([fig], args.plot)
+    plt.close(fig)
 
     print(f"By-strain NMD analysis complete. Report: {args.output}")
 
@@ -413,7 +436,7 @@ def main():
     parser.add_argument('--output', required=True,
                         help='Output text report')
     parser.add_argument('--plot', required=True,
-                        help='Output PDF plot')
+                        help='Output PDF plot (also writes sibling PNG)')
 
     # Default mode args
     parser.add_argument('--gtf', help='GTF file (default mode)')

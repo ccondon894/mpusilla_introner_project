@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import argparse
+from pathlib import Path
 
 # Function to compute 95% confidence intervals
 def compute_confidence_intervals(data):
@@ -33,13 +34,16 @@ def plot_scatter_matrix(bootstrap_data, param_names, lower_bounds, upper_bounds,
     
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig(output_file)
+    output_path = Path(output_file)
+    if output_path.suffix.lower() == ".pdf":
+        plt.savefig(output_path.with_suffix(".png"))
     plt.show()
 
 # Argparse function for handling command line arguments
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate scatter plots from demographic inference bootstraps.")
     parser.add_argument('input_file', help='Path to the input file containing parameter estimates and bootstraps.')
-    parser.add_argument('--output_file', default='scatter_matrix.pdf', help='Output file for the scatter matrix plot (default: scatter_matrix.pdf).')
+    parser.add_argument('--output_file', default='scatter_matrix.pdf', help='Output file for the scatter matrix plot PDF (also writes sibling PNG).')
     return parser.parse_args()
 
 # Main function to handle the overall process

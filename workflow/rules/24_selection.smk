@@ -329,7 +329,8 @@ rule compare_recombination_introners_all:
     output:
         summary_tsv = RECOMB_DIR / "gene_exonic_introners_all_5kb_updated_summary.tsv",
         windows_tsv = RECOMB_DIR / "gene_exonic_introners_all_5kb_updated_windows.tsv",
-        pdf = RECOMB_DIR / "gene_exonic_introners_all_5kb_updated.pdf"
+        pdf = RECOMB_DIR / "gene_exonic_introners_all_5kb_updated.pdf",
+        png = RECOMB_DIR / "gene_exonic_introners_all_5kb_updated.png"
     params:
         pyrho_dir = PYRHO_CCMP1545,
         sample_name = "CCMP1545",
@@ -368,7 +369,8 @@ rule compare_recombination_introners_polymorphic:
     output:
         summary_tsv = RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated_summary.tsv",
         windows_tsv = RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated_windows.tsv",
-        pdf = RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated.pdf"
+        pdf = RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated.pdf",
+        png = RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated.png"
     params:
         pyrho_dir = PYRHO_CCMP1545,
         sample_name = "CCMP1545",
@@ -407,7 +409,8 @@ rule compare_recombination_frequency_based:
     output:
         summary_tsv = RECOMB_DIR / "gene_exonic_frequency_based_5kb_updated_summary.tsv",
         windows_tsv = RECOMB_DIR / "gene_exonic_frequency_based_5kb_updated_windows.tsv",
-        pdf = RECOMB_DIR / "gene_exonic_frequency_based_5kb_updated.pdf"
+        pdf = RECOMB_DIR / "gene_exonic_frequency_based_5kb_updated.pdf",
+        png = RECOMB_DIR / "gene_exonic_frequency_based_5kb_updated.png"
     params:
         pyrho_dir = PYRHO_CCMP1545,
         exclude_samples = ",".join(GROUP2_SAMPLES),
@@ -448,7 +451,8 @@ rule compare_recombination_group2:
     output:
         summary_tsv = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_summary.tsv",
         windows_tsv = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_windows.tsv",
-        pdf = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated.pdf"
+        pdf = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated.pdf",
+        png = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated.png"
     params:
         pyrho_dir = PYRHO_RCC1749,
         window_size = 5000,

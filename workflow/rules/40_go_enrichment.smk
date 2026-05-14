@@ -2,20 +2,20 @@
 # 40_go_enrichment.smk - GO Term Enrichment Analysis
 # ============================================================
 #
-# Performs Gene Ontology enrichment analysis for introner genes:
+# Performs Gene Ontology enrichment analysis for biologically defined
+# introner groups in genotype_matrix.final.tsv:
 # 1. Generate GO mappings from multiple databases (Pfam, KO, TAIR, PANTHER)
 # 2. Enhance GO coverage by merging all sources
-# 3. Phase 1: Gene classification by introner status
-# 4. Phase 2: GO enrichment analysis (Fixed vs Polymorphic, Group1 vs Group2)
-# 5. Phase 2b: Family-stratified enrichment
-# 6. Visualization and reporting
+# 3. Classify final-matrix introner loci as all introners, ancestral,
+#    independent insertion, polymorphic within Group 1, or consistently
+#    present within Group 1/2
+# 4. Run full-GO and GO Slim enrichment and generate final figures
 #
 # Adapted from:
 # - /scratch1/chris/mpusilla_go_analysis/scripts/
 #
 # ============================================================
 
-import os
 from pathlib import Path
 
 # ============================================================
@@ -26,16 +26,21 @@ from pathlib import Path
 GO_DIR = RESULTS / "go_enrichment"
 GO_MAPPING_DIR = GO_DIR / "mappings"
 GO_RESULTS_DIR = GO_DIR / "results"
-GO_PLOTS_DIR = GO_DIR / "plots"
 GO_LOG_DIR = GO_DIR / "logs"
 
 # External database paths
 INTERPRO2GO = config["paths"]["external_db"]["interpro2go"]
+INTERPRO_TO_PFAM = config["paths"]["external_db"].get(
+    "interpro_to_pfam",
+    str(Path(INTERPRO2GO).parent / "interpro_to_pfam.json")
+)
 TAIR_ASSOC = config["paths"]["external_db"]["gene_association_tair"]
 PANTHER_HMM = config["paths"]["external_db"]["panther_hmm"]
 
 # Annotation file
 ANNOTATION_INFO = config["paths"]["references"]["annotation_info"]
+GO_API_TIMEOUT = config["params"]["go"].get("api_timeout", 30)
+GO_API_MAX_RETRIES = config["params"]["go"].get("api_max_retries", 3)
 
 
 # ============================================================
@@ -51,11 +56,17 @@ rule pfam_to_go:
     """
     input:
         interpro2go = INTERPRO2GO,
+        interpro_to_pfam = INTERPRO_TO_PFAM,
         annotation = ANNOTATION_INFO
     output:
         json = GO_MAPPING_DIR / "pfam_to_go.json"
+    params:
+        timeout = GO_API_TIMEOUT,
+        max_retries = GO_API_MAX_RETRIES
     log:
         GO_LOG_DIR / "pfam_to_go.log"
+    conda:
+        "../envs/go_enrichment.yaml"
     shell:
         """
         mkdir -p {GO_MAPPING_DIR}
@@ -65,6 +76,9 @@ rule pfam_to_go:
             {input.interpro2go} \
             {input.annotation} \
             {output.json} \
+            --interpro-to-pfam {input.interpro_to_pfam} \
+            --timeout {params.timeout} \
+            --max-retries {params.max_retries} \
             2> {log}
         """
 
@@ -79,13 +93,25 @@ rule ko_to_go:
         annotation = ANNOTATION_INFO
     output:
         json = GO_MAPPING_DIR / "ko_to_go.json"
+    params:
+        batch_size = config["params"]["go"].get("kegg_batch_size", 10),
+        timeout = GO_API_TIMEOUT,
+        max_retries = GO_API_MAX_RETRIES
     log:
         GO_LOG_DIR / "ko_to_go.log"
+    conda:
+        "../envs/go_enrichment.yaml"
     shell:
         """
+        mkdir -p {GO_MAPPING_DIR}
+        mkdir -p {GO_LOG_DIR}
+
         python {PROJECT_ROOT}/scripts/go_analysis/ko_to_go.py \
             {input.annotation} \
             {output.json} \
+            --batch-size {params.batch_size} \
+            --timeout {params.timeout} \
+            --max-retries {params.max_retries} \
             2> {log}
         """
 
@@ -103,8 +129,13 @@ rule tair_to_go:
         json = GO_MAPPING_DIR / "tair_to_go.json"
     log:
         GO_LOG_DIR / "tair_to_go.log"
+    conda:
+        "../envs/go_enrichment.yaml"
     shell:
         """
+        mkdir -p {GO_MAPPING_DIR}
+        mkdir -p {GO_LOG_DIR}
+
         python {PROJECT_ROOT}/scripts/go_analysis/tair_to_go.py \
             {input.annotation} \
             {input.tair_assoc} \
@@ -123,8 +154,13 @@ rule panther_to_go:
         json = GO_MAPPING_DIR / "panther_to_go.json"
     log:
         GO_LOG_DIR / "panther_to_go.log"
+    conda:
+        "../envs/go_enrichment.yaml"
     shell:
         """
+        mkdir -p {GO_MAPPING_DIR}
+        mkdir -p {GO_LOG_DIR}
+
         python {PROJECT_ROOT}/scripts/go_analysis/panther_to_go.py \
             {input.panther_db} \
             {output.json} \
@@ -154,8 +190,13 @@ rule enhance_go_coverage:
         stats = GO_MAPPING_DIR / "go_coverage_stats.txt"
     log:
         GO_LOG_DIR / "enhance_go_coverage.log"
+    conda:
+        "../envs/go_enrichment.yaml"
     shell:
         """
+        mkdir -p {GO_MAPPING_DIR}
+        mkdir -p {GO_LOG_DIR}
+
         python {PROJECT_ROOT}/scripts/go_analysis/enhance_go_coverage.py \
             {input.annotation} \
             {input.pfam_json} \
@@ -177,237 +218,154 @@ with open('{output.stats}', 'w') as f:
     f.write('GO Coverage Statistics\\n')
     f.write('=' * 40 + '\\n')
     f.write(f'Total genes: {{n_genes}}\\n')
-    f.write(f'Genes with GO terms: {{n_with_go}} ({{100*n_with_go/n_genes:.1f}}%)\\n')
+    pct_with_go = 100*n_with_go/n_genes if n_genes else 0.0
+    avg_go = total_go/n_genes if n_genes else 0.0
+    f.write(f'Genes with GO terms: {{n_with_go}} ({{pct_with_go:.1f}}%)\\n')
     f.write(f'Total GO annotations: {{total_go}}\\n')
-    f.write(f'Average GO terms per gene: {{total_go/n_genes:.1f}}\\n')
+    f.write(f'Average GO terms per gene: {{avg_go:.1f}}\\n')
 "
         """
 
 
 # ============================================================
-# PHASE 1: GENE CLASSIFICATION BY INTRONER STATUS
+# FINAL-MATRIX INTRONER GROUP GO ENRICHMENT
 # ============================================================
 
-rule introner_phase1_analysis:
+rule introner_group_go_enrichment:
     """
-    Classify genes by introner presence patterns.
+    GO enrichment for biologically defined introner groups in genotype_matrix.final.tsv.
 
-    For each gene, determines:
-    - group1_fixed: Introner fixed in all Group1 samples
-    - group1_polymorphic: Introner polymorphic within Group1
-    - group2_fixed: Introner fixed in all Group2 samples
-    - group2_polymorphic: Introner polymorphic within Group2
-    """
-    input:
-        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.tsv",
-        gtf_dir = ANNOTATIONS_DIR,
-        go_json = GO_MAPPING_DIR / "gene2go.json"
-    output:
-        results = GO_RESULTS_DIR / "phase1_gene_classification.tsv",
-        summary = GO_RESULTS_DIR / "phase1_summary.txt"
-    log:
-        GO_LOG_DIR / "phase1_analysis.log"
-    shell:
-        """
-        mkdir -p {GO_RESULTS_DIR}
+    Groups:
+    - ancestral: cross_group_status in ancestral/likely_ancestral/ancestral_low_identity
+    - independent_insertion: cross_group_status in independent/likely_independent
+    - polymorphic_within_group1: presence=1 and presence=2 both observed within Group 1
+    - consistent_group1: presence=1 for every Group 1 sample
+    - consistent_group2: presence=1 for every Group 2 sample
+    - all_introners: presence=1 in at least one Group 1 or Group 2 sample
 
-        python {PROJECT_ROOT}/scripts/go_analysis/introner_phase1_analysis.py \
-            {input.genotype_matrix} \
-            {input.gtf_dir} \
-            {input.go_json} \
-            {output.results} \
-            2> {log}
-
-        # Generate summary
-        python -c "
-import pandas as pd
-df = pd.read_csv('{output.results}', sep='\\t')
-with open('{output.summary}', 'w') as f:
-    f.write('Phase 1 Gene Classification Summary\\n')
-    f.write('=' * 50 + '\\n\\n')
-    f.write(f'Total genes analyzed: {{len(df)}}\\n')
-    f.write(f'Genes with Group1 fixed introners: {{df[\"group1_fixed\"].sum()}}\\n')
-    f.write(f'Genes with Group1 polymorphic introners: {{df[\"group1_polymorphic\"].sum()}}\\n')
-    f.write(f'Genes with Group2 fixed introners: {{df[\"group2_fixed\"].sum()}}\\n')
-    f.write(f'Genes with Group2 polymorphic introners: {{df[\"group2_polymorphic\"].sum()}}\\n')
-    f.write(f'Genes with GO annotations: {{(df[\"go_terms_str\"].str.len() > 0).sum()}}\\n')
-"
-        """
-
-
-rule plot_phase1_results:
-    """
-    Visualize Phase 1 gene classification results.
+    Missing calls (presence=3) are ignored for polymorphic and cross-group present
+    evidence. Consistent groups require every configured sample in that group to
+    be present. Background is all GO-annotated reference genes by default,
+    which supports the all_introners contrast against genes without introners.
     """
     input:
-        results = GO_RESULTS_DIR / "phase1_gene_classification.tsv",
-        go_json = GO_MAPPING_DIR / "gene2go.json"
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        go_json = GO_MAPPING_DIR / "gene2go.json",
+        go_obo = PROJECT_ROOT / "resources" / "go.obo",
+        script = PROJECT_ROOT / "scripts" / "go_analysis" / "introner_group_go_enrichment.py"
     output:
-        overview = GO_PLOTS_DIR / "phase1_overview.pdf",
-        venn = GO_PLOTS_DIR / "phase1_venn.pdf"
-    log:
-        GO_LOG_DIR / "plot_phase1.log"
-    shell:
-        """
-        mkdir -p {GO_PLOTS_DIR}
-
-        python {PROJECT_ROOT}/scripts/go_analysis/plot_phase1_results.py \
-            {input.results} \
-            {GO_PLOTS_DIR} \
-            --go_json {input.go_json} \
-            2> {log}
-        """
-
-
-# ============================================================
-# PHASE 2: GO ENRICHMENT ANALYSIS
-# ============================================================
-
-rule introner_phase2_enrichment:
-    """
-    Perform GO enrichment analysis for introner categories.
-
-    Tests for functional enrichment in:
-    - Group1 fixed introner genes
-    - Group1 polymorphic introner genes
-    - Group2 fixed introner genes
-    - Group2 polymorphic introner genes
-
-    Uses Fisher's exact test with FDR correction.
-    """
-    input:
-        phase1 = GO_RESULTS_DIR / "phase1_gene_classification.tsv",
-        go_json = GO_MAPPING_DIR / "gene2go.json"
-    output:
-        results = GO_RESULTS_DIR / "phase2_enrichment_results.tsv",
-        significant = GO_RESULTS_DIR / "phase2_significant_terms.tsv"
+        loci = GO_RESULTS_DIR / "introner_group_locus_classification.tsv",
+        gene_sets = GO_RESULTS_DIR / "introner_group_gene_sets.tsv",
+        enrichment = GO_RESULTS_DIR / "introner_group_go_enrichment.tsv",
+        significant = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.tsv",
+        summary = GO_RESULTS_DIR / "introner_group_go_enrichment.summary.txt"
     params:
+        group1_samples = ",".join(GROUP1_SAMPLES),
+        group2_samples = ",".join(GROUP2_SAMPLES),
         fdr_threshold = config["params"]["go"]["fdr_threshold"],
         min_genes = config["params"]["go"]["min_genes"]
     log:
-        GO_LOG_DIR / "phase2_enrichment.log"
+        GO_LOG_DIR / "introner_group_go_enrichment.log"
+    conda:
+        "../envs/go_enrichment.yaml"
     shell:
         """
-        python {PROJECT_ROOT}/scripts/go_analysis/introner_phase2_enrichment.py \
-            {input.phase1} \
-            {output.results} \
-            --go_json {input.go_json} \
-            --fdr_threshold {params.fdr_threshold} \
-            --min_genes {params.min_genes} \
-            2> {log}
+        mkdir -p {GO_RESULTS_DIR}
+        mkdir -p {GO_LOG_DIR}
 
-        # Extract significant terms
-        python -c "
-import pandas as pd
-df = pd.read_csv('{output.results}', sep='\\t')
-sig = df[df['significant'] == True] if 'significant' in df.columns else df[df['fdr_pvalue'] < {params.fdr_threshold}]
-sig.to_csv('{output.significant}', sep='\\t', index=False)
-"
-        """
-
-
-rule introner_phase2_family_enrichment:
-    """
-    Perform family-stratified GO enrichment analysis.
-
-    Analyzes GO enrichment separately for each introner family type.
-    """
-    input:
-        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.tsv",
-        phase1 = GO_RESULTS_DIR / "phase1_gene_classification.tsv",
-        go_json = GO_MAPPING_DIR / "gene2go.json"
-    output:
-        results = GO_RESULTS_DIR / "phase2_family_enrichment_results.tsv"
-    log:
-        GO_LOG_DIR / "phase2_family_enrichment.log"
-    shell:
-        """
-        python {PROJECT_ROOT}/scripts/go_analysis/introner_phase2_family_enrichment.py \
-            {input.genotype_matrix} \
-            {input.phase1} \
-            {output.results} \
-            --go_json {input.go_json} \
+        python {input.script} \
+            --genotype-matrix {input.genotype_matrix} \
+            --go-json {input.go_json} \
+            --go-obo {input.go_obo} \
+            --group1-samples {params.group1_samples} \
+            --group2-samples {params.group2_samples} \
+            --locus-output {output.loci} \
+            --gene-set-output {output.gene_sets} \
+            --enrichment-output {output.enrichment} \
+            --significant-output {output.significant} \
+            --summary-output {output.summary} \
+            --fdr-threshold {params.fdr_threshold} \
+            --min-genes {params.min_genes} \
+            --background-scope all_annotated \
             2> {log}
         """
 
 
-rule plot_phase2_results:
+rule introner_group_go_slim_enrichment:
     """
-    Visualize Phase 2 GO enrichment results.
+    GO Slim enrichment for the same final-matrix introner groups.
 
-    Creates:
-    - Enrichment heatmap (GO categories x introner types)
-    - Volcano plots (effect size vs significance)
-    - Top enriched categories bar charts
+    Uses broad propagated GO ancestor categories to reduce the multiple-testing
+    burden and test general enrichment/depletion patterns.
     """
     input:
-        results = GO_RESULTS_DIR / "phase2_enrichment_results.tsv"
-    output:
-        heatmap = GO_PLOTS_DIR / "phase2_enrichment_heatmap.pdf",
-        volcano = GO_PLOTS_DIR / "phase2_volcano_plots.pdf",
-        barchart = GO_PLOTS_DIR / "phase2_top_enriched.pdf"
-    log:
-        GO_LOG_DIR / "plot_phase2.log"
-    shell:
-        """
-        python {PROJECT_ROOT}/scripts/go_analysis/plot_phase2_results.py \
-            {input.results} \
-            {GO_PLOTS_DIR} \
-            2> {log}
-        """
-
-
-# ============================================================
-# STANDARD GO ENRICHMENT (GOATOOLS-BASED)
-# ============================================================
-
-rule run_goatools_enrichment:
-    """
-    Run standard GO enrichment using goatools library.
-
-    Provides additional statistical methods:
-    - Bonferroni correction
-    - Sidak correction
-    - Holm correction
-    - FDR (Benjamini-Hochberg)
-    """
-    input:
-        phase1 = GO_RESULTS_DIR / "phase1_gene_classification.tsv",
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        go_json = GO_MAPPING_DIR / "gene2go.json",
         go_obo = PROJECT_ROOT / "resources" / "go.obo",
-        go_json = GO_MAPPING_DIR / "gene2go.json"
+        script = PROJECT_ROOT / "scripts" / "go_analysis" / "introner_group_go_slim_enrichment.py",
+        classifier = PROJECT_ROOT / "scripts" / "go_analysis" / "introner_group_go_enrichment.py"
     output:
-        enrichment = GO_RESULTS_DIR / "goatools_enrichment_results.tsv"
+        enrichment = GO_RESULTS_DIR / "introner_group_go_slim_enrichment.tsv",
+        significant = GO_RESULTS_DIR / "introner_group_go_slim_enrichment.significant.tsv",
+        summary = GO_RESULTS_DIR / "introner_group_go_slim_enrichment.summary.txt"
+    params:
+        group1_samples = ",".join(GROUP1_SAMPLES),
+        group2_samples = ",".join(GROUP2_SAMPLES),
+        fdr_threshold = config["params"]["go"]["fdr_threshold"],
+        min_genes = config["params"]["go"]["min_genes"]
     log:
-        GO_LOG_DIR / "goatools_enrichment.log"
+        GO_LOG_DIR / "introner_group_go_slim_enrichment.log"
+    conda:
+        "../envs/go_enrichment.yaml"
     shell:
         """
-        python {PROJECT_ROOT}/scripts/go_analysis/go_enrichment.py \
-            --go_obo {input.go_obo} \
-            --go_json {input.go_json} \
-            --genes {input.phase1} \
-            --output {output.enrichment} \
+        mkdir -p {GO_RESULTS_DIR}
+        mkdir -p {GO_LOG_DIR}
+
+        python {input.script} \
+            --genotype-matrix {input.genotype_matrix} \
+            --go-json {input.go_json} \
+            --go-obo {input.go_obo} \
+            --group1-samples {params.group1_samples} \
+            --group2-samples {params.group2_samples} \
+            --enrichment-output {output.enrichment} \
+            --significant-output {output.significant} \
+            --summary-output {output.summary} \
+            --fdr-threshold {params.fdr_threshold} \
+            --min-genes {params.min_genes} \
+            --background-scope all_annotated \
             2> {log}
         """
 
 
-# ============================================================
-# COPY FIGURES TO MAIN FIGURES DIRECTORY
-# ============================================================
-
-rule copy_go_figures:
+rule plot_introner_group_go_enrichment:
     """
-    Copy key GO analysis figures to main figures directory.
+    Plot GO enrichment results generated from genotype_matrix.final.tsv.
     """
     input:
-        heatmap = GO_PLOTS_DIR / "phase2_enrichment_heatmap.pdf",
-        overview = GO_PLOTS_DIR / "phase1_overview.pdf"
+        enrichment = GO_RESULTS_DIR / "introner_group_go_enrichment.tsv",
+        script = PROJECT_ROOT / "scripts" / "go_analysis" / "plot_introner_group_go_enrichment.py"
     output:
         heatmap = FIGURES_DIR / "go_enrichment_heatmap.pdf",
-        overview = FIGURES_DIR / "go_phase1_overview.pdf"
+        heatmap_png = FIGURES_DIR / "go_enrichment_heatmap.png",
+        top_terms = FIGURES_DIR / "go_enrichment_top_terms.pdf",
+        top_terms_png = FIGURES_DIR / "go_enrichment_top_terms.png"
+    log:
+        GO_LOG_DIR / "plot_introner_group_go_enrichment.log"
+    conda:
+        "../envs/go_enrichment.yaml"
     shell:
         """
-        cp {input.heatmap} {output.heatmap}
-        cp {input.overview} {output.overview}
+        mkdir -p {FIGURES_DIR}
+        mkdir -p {GO_LOG_DIR}
+        mkdir -p {GO_LOG_DIR}/matplotlib
+
+        MPLCONFIGDIR={GO_LOG_DIR}/matplotlib \
+            python {input.script} \
+            {input.enrichment} \
+            --heatmap-output {output.heatmap} \
+            --top-terms-output {output.top_terms} \
+            2> {log}
         """
 
 
@@ -417,21 +375,27 @@ rule copy_go_figures:
 
 rule go_enrichment_complete:
     """
-    Target: Complete GO enrichment analysis pipeline.
+    Target: Complete current GO enrichment analysis pipeline.
+
+    Uses the final genotype matrix and the biologically defined introner groups:
+    all_introners, ancestral, independent_insertion, polymorphic_within_group1,
+    consistent_group1, and consistent_group2.
     """
     input:
         # GO mappings
         GO_MAPPING_DIR / "gene2go.json",
         GO_MAPPING_DIR / "go_coverage_stats.txt",
-        # Phase 1
-        GO_RESULTS_DIR / "phase1_gene_classification.tsv",
-        GO_PLOTS_DIR / "phase1_overview.pdf",
-        # Phase 2
-        GO_RESULTS_DIR / "phase2_enrichment_results.tsv",
-        GO_RESULTS_DIR / "phase2_family_enrichment_results.tsv",
-        GO_PLOTS_DIR / "phase2_enrichment_heatmap.pdf",
-        # Main figures
-        FIGURES_DIR / "go_enrichment_heatmap.pdf"
+        # Final-matrix introner group enrichment
+        GO_RESULTS_DIR / "introner_group_locus_classification.tsv",
+        GO_RESULTS_DIR / "introner_group_gene_sets.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.summary.txt",
+        GO_RESULTS_DIR / "introner_group_go_slim_enrichment.tsv",
+        GO_RESULTS_DIR / "introner_group_go_slim_enrichment.significant.tsv",
+        GO_RESULTS_DIR / "introner_group_go_slim_enrichment.summary.txt",
+        FIGURES_DIR / "go_enrichment_heatmap.pdf",
+        FIGURES_DIR / "go_enrichment_top_terms.pdf"
 
 
 rule go_mapping_only:
@@ -443,19 +407,20 @@ rule go_mapping_only:
         GO_MAPPING_DIR / "go_coverage_stats.txt"
 
 
-rule go_phase1_only:
+rule introner_group_go_enrichment_complete:
     """
-    Target: Phase 1 gene classification only.
-    """
-    input:
-        GO_RESULTS_DIR / "phase1_gene_classification.tsv",
-        GO_PLOTS_DIR / "phase1_overview.pdf"
-
-
-rule go_phase2_only:
-    """
-    Target: Phase 2 enrichment analysis only.
+    Target: Final-matrix GO enrichment for all introners, ancestral,
+    independent insertion, Group 1 polymorphic, and consistently present
+    introner groups.
     """
     input:
-        GO_RESULTS_DIR / "phase2_enrichment_results.tsv",
-        GO_PLOTS_DIR / "phase2_enrichment_heatmap.pdf"
+        GO_RESULTS_DIR / "introner_group_locus_classification.tsv",
+        GO_RESULTS_DIR / "introner_group_gene_sets.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.summary.txt",
+        GO_RESULTS_DIR / "introner_group_go_slim_enrichment.tsv",
+        GO_RESULTS_DIR / "introner_group_go_slim_enrichment.significant.tsv",
+        GO_RESULTS_DIR / "introner_group_go_slim_enrichment.summary.txt",
+        FIGURES_DIR / "go_enrichment_heatmap.pdf",
+        FIGURES_DIR / "go_enrichment_top_terms.pdf"

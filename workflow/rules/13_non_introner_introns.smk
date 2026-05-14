@@ -122,6 +122,7 @@ rule non_introner_intron_afs:
     output:
         matrix = NON_INTRONER_DIR / "intron_genotype_matrix.tsv",
         afs_plot = FIGURES_DIR / "non_introner_intron_afs.pdf",
+        afs_png = FIGURES_DIR / "non_introner_intron_afs.png",
         summary = NON_INTRONER_DIR / "summary_statistics.txt",
     params:
         gtf_dir = str(ANNOTATIONS_DIR),

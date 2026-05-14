@@ -85,6 +85,7 @@ rule hisat2_index:
     threads: 8
     log:
         EXPRESSION_LOG_DIR / "hisat2_index_{sample}.log"
+    conda: "../envs/expression.yaml"
     shell:
         """
         mkdir -p {output.index}
@@ -116,6 +117,7 @@ rule hisat2_align:
     threads: 8
     log:
         EXPRESSION_LOG_DIR / "hisat2_align" / "{replicate}.log"
+    conda: "../envs/expression.yaml"
     shell:
         """
         mkdir -p {ALIGNMENT_DIR}/bams
@@ -152,6 +154,7 @@ rule featurecounts_per_sample:
     threads: 4
     log:
         EXPRESSION_LOG_DIR / "featurecounts" / "{replicate}.log"
+    conda: "../envs/expression.yaml"
     shell:
         """
         mkdir -p {COUNTS_DIR}
@@ -231,6 +234,7 @@ rule stringtie_assemble:
     threads: 8
     log:
         EXPRESSION_LOG_DIR / "stringtie" / "{replicate}.log"
+    conda: "../envs/expression.yaml"
     shell:
         """
         mkdir -p $(dirname {output.gtf})
@@ -266,6 +270,7 @@ rule stringtie_merge:
     threads: 8
     log:
         EXPRESSION_LOG_DIR / "stringtie" / "{sample}_merge.log"
+    conda: "../envs/expression.yaml"
     shell:
         """
         mkdir -p $(dirname {output.gtf})
@@ -458,6 +463,7 @@ rule find_novel_orthologs:
     threads: 8
     log:
         EXPRESSION_LOG_DIR / "stringtie" / "{sample}_orthologs.log"
+    conda: "../envs/expression.yaml"
     shell:
         """
         mkdir -p $(dirname {output.blastx})
@@ -649,6 +655,7 @@ rule parse_sqanti3_output:
         summary = SQANTI_DIR / "sqanti3_summary.txt"
     log:
         EXPRESSION_LOG_DIR / "parse_sqanti3.log"
+    conda: "../envs/expression.yaml"
     shell:
         """
         mkdir -p {SQANTI_DIR}
