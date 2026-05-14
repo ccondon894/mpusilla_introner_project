@@ -94,8 +94,10 @@ paths:
   # External databases for GO analysis
   external_db:
     interpro2go: "/scratch1/chris/mpusilla_go_analysis/data/interpro2go"
+    interpro_to_pfam: "/scratch1/chris/mpusilla_go_analysis/data/interpro_to_pfam.json"
     gene_association_tair: "/scratch1/chris/mpusilla_go_analysis/data/gene_association.tair"
     panther_hmm: "/scratch1/chris/mpusilla_go_analysis/data/PANTHER19.0_HMM_classifications"
+    eggnog_data_dir: "data/eggnog_mapper/eggnog_db"
 
   # Pyrho recombination maps
   pyrho:
@@ -215,6 +217,13 @@ params:
     min_genes: 5                 # Minimum genes per category
     fdr_threshold: 0.05          # FDR significance threshold
     test: "fisher"               # Statistical test
+    kegg_batch_size: 10          # KEGG REST get limit is 10 entries/request
+    api_timeout: 30              # HTTP timeout in seconds for GO mapping APIs
+    eggnog_prefix: "mp_ccmp1545"
+    eggnog_cpus: 16
+    eggnog_go_evidence: "non-electronic"
+    eggnog_tax_scope: "auto"
+    api_max_retries: 3           # Retry transient API failures
 
 # ============================================================
 # PLOT CONFIGURATION

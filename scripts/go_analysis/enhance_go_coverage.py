@@ -3,6 +3,7 @@ import requests
 import json
 import sys
 from collections import defaultdict
+import argparse
 
 def flatten_mixed_list(mixed_list):
     """Recursively flatten a mixed list of strings and lists."""
@@ -25,18 +26,32 @@ def process_file(filename):
         print(f"Error loading {filename}: {e}")
         return {}
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Merge multiple GO mapping sources into a gene2go JSON."
+    )
+    parser.add_argument("tsv", help="Annotation info TSV")
+    parser.add_argument("pfam_json", help="Pfam-to-GO JSON")
+    parser.add_argument("ko_json", help="KO-to-GO JSON")
+    parser.add_argument("tair_json", help="TAIR-to-GO JSON")
+    parser.add_argument("panther_json", help="PANTHER-to-GO JSON")
+    parser.add_argument("outfile", help="Output gene2go JSON")
+    parser.add_argument(
+        "--eggnog-json",
+        help="Optional eggNOG-derived gene2go JSON to merge in",
+    )
+    return parser.parse_args()
+
+
 def main():
-    # Process command line arguments
-    if len(sys.argv) < 7:
-        print("Usage: script.py tsv pfam_json ko_json tair_json panther_json outfile")
-        sys.exit(1)
-        
-    tsv = sys.argv[1]
-    pfam_json = sys.argv[2]
-    ko_json = sys.argv[3]
-    tair_json = sys.argv[4]
-    panther_json = sys.argv[5]
-    outfile = sys.argv[6]
+    args = parse_args()
+    tsv = args.tsv
+    pfam_json = args.pfam_json
+    ko_json = args.ko_json
+    tair_json = args.tair_json
+    panther_json = args.panther_json
+    outfile = args.outfile
     
     # Load the TSV file
     print("Loading annotation file...")
@@ -103,6 +118,12 @@ def main():
             for panther_id in row['Panther'].split(','):
                 if panther_id in panther_dict:
                     gene_to_go[gene_id].update(panther_dict[panther_id])
+
+    if args.eggnog_json:
+        print("Processing eggNOG terms...")
+        eggnog_dict = process_file(args.eggnog_json)
+        for gene_id, terms in eggnog_dict.items():
+            gene_to_go[gene_id].update(flatten_mixed_list(terms))
     
     # Prepare final output
     print("Preparing output...")
