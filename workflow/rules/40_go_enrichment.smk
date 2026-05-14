@@ -27,6 +27,7 @@ GO_DIR = RESULTS / "go_enrichment"
 GO_MAPPING_DIR = GO_DIR / "mappings"
 GO_RESULTS_DIR = GO_DIR / "results"
 GO_LOG_DIR = GO_DIR / "logs"
+GO_EGGNOG_DIR = GO_MAPPING_DIR / "eggnog_mapper"
 
 # External database paths
 INTERPRO2GO = config["paths"]["external_db"]["interpro2go"]
@@ -36,16 +37,118 @@ INTERPRO_TO_PFAM = config["paths"]["external_db"].get(
 )
 TAIR_ASSOC = config["paths"]["external_db"]["gene_association_tair"]
 PANTHER_HMM = config["paths"]["external_db"]["panther_hmm"]
+EGGNOG_DATA_DIR = PROJECT_ROOT / config["paths"]["external_db"]["eggnog_data_dir"]
 
 # Annotation file
 ANNOTATION_INFO = config["paths"]["references"]["annotation_info"]
+REFERENCE_PROTEINS = RESULTS / "proteins" / "reference_proteins.fa"
 GO_API_TIMEOUT = config["params"]["go"].get("api_timeout", 30)
 GO_API_MAX_RETRIES = config["params"]["go"].get("api_max_retries", 3)
+EGGNOG_PREFIX = config["params"]["go"].get("eggnog_prefix", "mp_ccmp1545")
+EGGNOG_CPUS = config["params"]["go"].get("eggnog_cpus", 16)
+EGGNOG_GO_EVIDENCE = config["params"]["go"].get("eggnog_go_evidence", "non-electronic")
+EGGNOG_TAX_SCOPE = config["params"]["go"].get("eggnog_tax_scope", "auto")
+EGGNOG_ENV = "workflow/envs/eggnog_mapper.yaml"
 
 
 # ============================================================
 # GO TERM MAPPING FROM MULTIPLE DATABASES
 # ============================================================
+
+rule run_eggnog_mapper:
+    """
+    Run eggNOG-mapper on the reference protein FASTA.
+
+    The expensive emapper step is skipped if the annotations output already
+    exists, while the database download remains independently idempotent.
+    """
+    input:
+        proteins = REFERENCE_PROTEINS
+    output:
+        annotations = GO_EGGNOG_DIR / f"{EGGNOG_PREFIX}.emapper.annotations",
+        hits = GO_EGGNOG_DIR / f"{EGGNOG_PREFIX}.emapper.hits",
+        seed_orthologs = GO_EGGNOG_DIR / f"{EGGNOG_PREFIX}.emapper.seed_orthologs"
+    params:
+        data_dir = EGGNOG_DATA_DIR,
+        prefix = EGGNOG_PREFIX,
+        cpus = EGGNOG_CPUS,
+        go_evidence = EGGNOG_GO_EVIDENCE,
+        tax_scope = EGGNOG_TAX_SCOPE,
+        url_base = "http://eggnog6.embl.de/download/emapperdb-5.0.2"
+    log:
+        GO_LOG_DIR / "run_eggnog_mapper.log"
+    conda:
+        EGGNOG_ENV
+    shell:
+        """
+        mkdir -p {GO_EGGNOG_DIR}
+        mkdir -p {GO_LOG_DIR}
+        mkdir -p {params.data_dir}
+
+        if [[ ! -f "{params.data_dir}/eggnog.db" ]]; then
+            echo "[$(date)] Downloading eggNOG databases to {params.data_dir}" >> {log}
+            cd {params.data_dir}
+            for f in eggnog.db.gz eggnog.taxa.tar.gz eggnog_proteins.dmnd.gz; do
+                wget -c --tries=3 "{params.url_base}/$f" >> {log} 2>&1
+            done
+            gunzip -f eggnog.db.gz >> {log} 2>&1
+            gunzip -f eggnog_proteins.dmnd.gz >> {log} 2>&1
+            tar -xzf eggnog.taxa.tar.gz >> {log} 2>&1
+            rm -f eggnog.taxa.tar.gz
+            cd - > /dev/null
+        fi
+
+        if [[ -s {output.annotations} && -s {output.hits} && -s {output.seed_orthologs} ]]; then
+            echo "[$(date)] Found existing eggNOG outputs in {GO_EGGNOG_DIR}; skipping emapper run." >> {log}
+        else
+            echo "[$(date)] Running emapper.py with {params.cpus} threads" >> {log}
+            emapper.py \
+                -i {input.proteins} \
+                --itype proteins \
+                --output {params.prefix} \
+                --output_dir {GO_EGGNOG_DIR} \
+                --data_dir {params.data_dir} \
+                -m diamond \
+                --cpu {params.cpus} \
+                --go_evidence {params.go_evidence} \
+                --tax_scope {params.tax_scope} \
+                --override \
+                >> {log} 2>&1
+        fi
+        """
+
+
+rule parse_eggnog_to_gene2go:
+    """
+    Convert eggNOG-mapper annotations into a gene2go JSON compatible with the
+    downstream GO enrichment workflow.
+    """
+    input:
+        emapper = GO_EGGNOG_DIR / f"{EGGNOG_PREFIX}.emapper.annotations",
+        fasta = REFERENCE_PROTEINS,
+        annotation = ANNOTATION_INFO,
+        script = PROJECT_ROOT / "scripts" / "go_analysis" / "parse_emapper_to_gene2go.py"
+    output:
+        json = GO_MAPPING_DIR / "gene2go.eggnog.json",
+        stats = GO_MAPPING_DIR / "gene2go.eggnog.stats.txt"
+    log:
+        GO_LOG_DIR / "parse_eggnog_to_gene2go.log"
+    conda:
+        EGGNOG_ENV
+    shell:
+        """
+        mkdir -p {GO_MAPPING_DIR}
+        mkdir -p {GO_LOG_DIR}
+
+        python {input.script} \
+            --emapper {input.emapper} \
+            --fasta {input.fasta} \
+            --annotation {input.annotation} \
+            --gene2go {output.json} \
+            --stats {output.stats} \
+            2> {log}
+        """
+
 
 rule pfam_to_go:
     """
@@ -184,7 +287,8 @@ rule enhance_go_coverage:
         pfam_json = GO_MAPPING_DIR / "pfam_to_go.json",
         ko_json = GO_MAPPING_DIR / "ko_to_go.json",
         tair_json = GO_MAPPING_DIR / "tair_to_go.json",
-        panther_json = GO_MAPPING_DIR / "panther_to_go.json"
+        panther_json = GO_MAPPING_DIR / "panther_to_go.json",
+        eggnog_json = GO_MAPPING_DIR / "gene2go.eggnog.json"
     output:
         json = GO_MAPPING_DIR / "gene2go.json",
         stats = GO_MAPPING_DIR / "go_coverage_stats.txt"
@@ -204,6 +308,7 @@ rule enhance_go_coverage:
             {input.tair_json} \
             {input.panther_json} \
             {output.json} \
+            --eggnog-json {input.eggnog_json} \
             2> {log}
 
         # Generate coverage statistics
@@ -404,6 +509,8 @@ rule go_mapping_only:
     """
     input:
         GO_MAPPING_DIR / "gene2go.json",
+        GO_MAPPING_DIR / "gene2go.eggnog.json",
+        GO_MAPPING_DIR / "gene2go.eggnog.stats.txt",
         GO_MAPPING_DIR / "go_coverage_stats.txt"
 
 
