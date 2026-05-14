@@ -23,8 +23,31 @@ from statsmodels.genmod.families import Poisson, NegativeBinomial
 from statsmodels.nonparametric.smoothers_lowess import lowess
 from scipy import stats
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings('ignore')
+
+
+def save_figures_with_png(figures, output_path):
+    """Write a multi-page PDF and a single PNG contact sheet of the same figures."""
+    output_path = Path(output_path)
+    with PdfPages(output_path) as pdf:
+        for fig in figures:
+            pdf.savefig(fig)
+
+    if output_path.suffix.lower() == ".pdf" and figures:
+        rendered = []
+        for fig in figures:
+            fig.canvas.draw()
+            rendered.append(np.asarray(fig.canvas.buffer_rgba()))
+
+        summary_fig, axes = plt.subplots(len(rendered), 1, figsize=(12, max(4, 3.5 * len(rendered))), squeeze=False)
+        for ax, image in zip(axes.flatten(), rendered):
+            ax.imshow(image)
+            ax.axis("off")
+        summary_fig.tight_layout()
+        summary_fig.savefig(output_path.with_suffix(".png"), dpi=300, bbox_inches="tight")
+        plt.close(summary_fig)
 
 
 def main():
@@ -165,46 +188,45 @@ def main():
     deviance_resid = best_model.resid_deviance
     fitted_values = best_model.fittedvalues
 
-    with PdfPages(args.diagnostics) as pdf:
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
-        # 1. Deviance Residuals vs Fitted
-        ax = axes[0, 0]
-        ax.scatter(fitted_values, deviance_resid, alpha=0.3, s=10)
-        ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
-        try:
-            lw = lowess(deviance_resid, fitted_values, frac=0.2)
-            ax.plot(lw[:, 0], lw[:, 1], 'b-', linewidth=2)
-        except Exception:
-            pass
-        ax.set_xlabel('Fitted values')
-        ax.set_ylabel('Deviance residuals')
-        ax.set_title('Deviance Residuals vs Fitted')
+    # 1. Deviance Residuals vs Fitted
+    ax = axes[0, 0]
+    ax.scatter(fitted_values, deviance_resid, alpha=0.3, s=10)
+    ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
+    try:
+        lw = lowess(deviance_resid, fitted_values, frac=0.2)
+        ax.plot(lw[:, 0], lw[:, 1], 'b-', linewidth=2)
+    except Exception:
+        pass
+    ax.set_xlabel('Fitted values')
+    ax.set_ylabel('Deviance residuals')
+    ax.set_title('Deviance Residuals vs Fitted')
 
-        # 2. Q-Q plot
-        ax = axes[0, 1]
-        stats.probplot(deviance_resid, dist="norm", plot=ax)
-        ax.set_title('Normal Q-Q (Deviance Residuals)')
+    # 2. Q-Q plot
+    ax = axes[0, 1]
+    stats.probplot(deviance_resid, dist="norm", plot=ax)
+    ax.set_title('Normal Q-Q (Deviance Residuals)')
 
-        # 3. Scale-Location
-        ax = axes[1, 0]
-        resid_abs_sqrt = np.sqrt(np.abs(deviance_resid))
-        ax.scatter(fitted_values, resid_abs_sqrt, alpha=0.3, s=10)
-        ax.set_xlabel('Fitted values')
-        ax.set_ylabel('sqrt(|Deviance residuals|)')
-        ax.set_title('Scale-Location')
+    # 3. Scale-Location
+    ax = axes[1, 0]
+    resid_abs_sqrt = np.sqrt(np.abs(deviance_resid))
+    ax.scatter(fitted_values, resid_abs_sqrt, alpha=0.3, s=10)
+    ax.set_xlabel('Fitted values')
+    ax.set_ylabel('sqrt(|Deviance residuals|)')
+    ax.set_title('Scale-Location')
 
-        # 4. Histogram of residuals
-        ax = axes[1, 1]
-        ax.hist(deviance_resid, bins=50, color='skyblue', edgecolor='black', alpha=0.7)
-        ax.axvline(x=0, color='r', linestyle='--', linewidth=2)
-        ax.set_xlabel('Deviance residuals')
-        ax.set_ylabel('Frequency')
-        ax.set_title('Histogram of Residuals')
+    # 4. Histogram of residuals
+    ax = axes[1, 1]
+    ax.hist(deviance_resid, bins=50, color='skyblue', edgecolor='black', alpha=0.7)
+    ax.axvline(x=0, color='r', linestyle='--', linewidth=2)
+    ax.set_xlabel('Deviance residuals')
+    ax.set_ylabel('Frequency')
+    ax.set_title('Histogram of Residuals')
 
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.close()
+    fig.tight_layout()
+    save_figures_with_png([fig], args.diagnostics)
+    plt.close(fig)
 
     print(f"Diagnostic plots saved to {args.diagnostics}")
 

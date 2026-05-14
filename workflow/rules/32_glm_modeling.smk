@@ -53,9 +53,11 @@ rule poisson_glm_isoform_diversity:
     output:
         results = GLM_DIR / "poisson_glm_summary.txt",
         coefficients = GLM_DIR / "poisson_glm_coefficients.csv",
-        diagnostics = GLM_DIR / "poisson_glm_diagnostics.pdf"
+        diagnostics = GLM_DIR / "poisson_glm_diagnostics.pdf",
+        diagnostics_png = GLM_DIR / "poisson_glm_diagnostics.png"
     log:
         EXPRESSION_LOG_DIR / "poisson_glm.log"
+    conda: "../envs/glm_modeling.yaml"
     shell:
         """
         mkdir -p {GLM_DIR}
@@ -83,6 +85,7 @@ rule poisson_glm_gene_length:
         coefficients = GLM_DIR / "poisson_glm_length_coefficients.csv"
     log:
         EXPRESSION_LOG_DIR / "poisson_glm_length.log"
+    conda: "../envs/glm_modeling.yaml"
     shell:
         """
         python {PROJECT_ROOT}/scripts/expression/glm_modeling/poisson_glm_gene_length.py \
@@ -178,9 +181,11 @@ rule negative_binomial_glm:
     output:
         results = GLM_DIR / "negative_binomial_glm_results.txt",
         coefficients = GLM_DIR / "negative_binomial_glm_coefficients.csv",
-        diagnostics = GLM_DIR / "negative_binomial_glm_diagnostics.pdf"
+        diagnostics = GLM_DIR / "negative_binomial_glm_diagnostics.pdf",
+        diagnostics_png = GLM_DIR / "negative_binomial_glm_diagnostics.png"
     log:
         EXPRESSION_LOG_DIR / "negative_binomial_glm.log"
+    conda: "../envs/glm_modeling.yaml"
     shell:
         """
         python {PROJECT_ROOT}/scripts/expression/glm_modeling/negative_binomial_glm.py \
@@ -210,47 +215,15 @@ rule compare_glm_models:
         plot = FIGURES_DIR / "glm_model_comparison.pdf"
     log:
         EXPRESSION_LOG_DIR / "compare_models.log"
+    conda: "../envs/glm_modeling.yaml"
     shell:
         """
-        python -c "
-import re
-
-# Parse AIC/BIC from model outputs
-def extract_fit_stats(filepath):
-    stats = {{}}
-    with open(filepath) as f:
-        content = f.read()
-        aic_match = re.search(r'AIC[:\\s]+([\\d.]+)', content)
-        bic_match = re.search(r'BIC[:\\s]+([\\d.]+)', content)
-        if aic_match:
-            stats['AIC'] = float(aic_match.group(1))
-        if bic_match:
-            stats['BIC'] = float(bic_match.group(1))
-    return stats
-
-poisson_stats = extract_fit_stats('{input.poisson}')
-negbin_stats = extract_fit_stats('{input.negbin}')
-
-with open('{output.comparison}', 'w') as f:
-    f.write('GLM Model Comparison\\n')
-    f.write('=' * 50 + '\\n\\n')
-    f.write('Poisson GLM:\\n')
-    f.write('  AIC: ' + str(poisson_stats.get('AIC', 'N/A')) + '\\n')
-    f.write('  BIC: ' + str(poisson_stats.get('BIC', 'N/A')) + '\\n\\n')
-    f.write('Negative Binomial GLM:\\n')
-    f.write('  AIC: ' + str(negbin_stats.get('AIC', 'N/A')) + '\\n')
-    f.write('  BIC: ' + str(negbin_stats.get('BIC', 'N/A')) + '\\n\\n')
-
-    # Recommend model
-    if poisson_stats.get('AIC') and negbin_stats.get('AIC'):
-        if negbin_stats['AIC'] < poisson_stats['AIC']:
-            f.write('Recommendation: Negative Binomial (lower AIC)\\n')
-        else:
-            f.write('Recommendation: Poisson (lower AIC)\\n')
-" 2> {log}
-
-        # Create placeholder plot
-        touch {output.plot}
+        python {PROJECT_ROOT}/scripts/expression/glm_modeling/compare_glm_models.py \
+            --poisson {input.poisson} \
+            --negbin {input.negbin} \
+            --output {output.comparison} \
+            --plot {output.plot} \
+            2> {log}
         """
 
 
@@ -265,60 +238,22 @@ rule visualize_glm_effects:
         negbin_coef = GLM_DIR / "negative_binomial_glm_coefficients.csv"
     output:
         effect_plot = FIGURES_DIR / "glm_effect_sizes.pdf",
-        forest_plot = FIGURES_DIR / "glm_forest_plot.pdf"
+        effect_png = FIGURES_DIR / "glm_effect_sizes.png",
+        forest_plot = FIGURES_DIR / "glm_forest_plot.pdf",
+        forest_png = FIGURES_DIR / "glm_forest_plot.png"
     log:
         EXPRESSION_LOG_DIR / "visualize_glm.log"
+    conda: "../envs/glm_modeling.yaml"
     shell:
         """
-        python -c "
-import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Load coefficients
-try:
-    poisson = pd.read_csv('{input.poisson_coef}')
-    negbin = pd.read_csv('{input.negbin_coef}')
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-
-    # Poisson coefficients
-    if 'coefficient' in poisson.columns:
-        ax = axes[0]
-        poisson_plot = poisson[poisson['variable'] != 'Intercept']
-        ax.barh(poisson_plot['variable'], poisson_plot['coefficient'])
-        ax.set_xlabel('Coefficient')
-        ax.set_title('Poisson GLM Coefficients')
-        ax.axvline(x=0, color='k', linestyle='--', alpha=0.5)
-
-    # Negative binomial coefficients
-    if 'coefficient' in negbin.columns:
-        ax = axes[1]
-        negbin_plot = negbin[negbin['variable'] != 'Intercept']
-        ax.barh(negbin_plot['variable'], negbin_plot['coefficient'])
-        ax.set_xlabel('Coefficient')
-        ax.set_title('Negative Binomial GLM Coefficients')
-        ax.axvline(x=0, color='k', linestyle='--', alpha=0.5)
-
-    plt.tight_layout()
-    plt.savefig('{output.effect_plot}')
-    plt.close()
-
-    # Forest plot (simplified)
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.text(0.5, 0.5, 'Forest plot - see coefficient files for details',
-            ha='center', va='center', transform=ax.transAxes)
-    plt.savefig('{output.forest_plot}')
-    plt.close()
-
-except Exception as e:
-    # Create placeholder plots
-    fig, ax = plt.subplots()
-    ax.text(0.5, 0.5, f'Could not generate plot: {{e}}', ha='center', va='center')
-    plt.savefig('{output.effect_plot}')
-    plt.savefig('{output.forest_plot}')
-    plt.close()
-" 2> {log}
+        python {PROJECT_ROOT}/scripts/expression/glm_modeling/visualize_glm_effects.py \
+            --poisson {input.poisson_coef} \
+            --negbin {input.negbin_coef} \
+            --effect-pdf {output.effect_plot} \
+            --effect-png {output.effect_png} \
+            --forest-pdf {output.forest_plot} \
+            --forest-png {output.forest_png} \
+            2> {log}
         """
 
 

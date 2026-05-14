@@ -58,8 +58,8 @@ def main():
     
     # Convert to sets for efficiency
     pfam_dict = {}
-    for key, lists in pfam_data.items():
-        pfam_dict[key] = set(item for sublist in lists for item in sublist)  # Flatten and convert to set
+    for key, terms in pfam_data.items():
+        pfam_dict[key] = set(flatten_mixed_list(terms))
     
     for index, row in df.iterrows():
         gene_id = row['locusName']
@@ -75,9 +75,10 @@ def main():
     for index, row in df.iterrows():
         gene_id = row['locusName']
         if pd.notna(row['KO']):
-            ko_id = row['KO']
-            if ko_id in ko_dict:
-                gene_to_go[gene_id].update(ko_dict[ko_id])
+            for ko_id in str(row['KO']).split(','):
+                ko_id = ko_id.strip()
+                if ko_id in ko_dict:
+                    gene_to_go[gene_id].update(ko_dict[ko_id])
     
     # Process TAIR terms
     print("Processing TAIR terms...")

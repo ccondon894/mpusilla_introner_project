@@ -56,40 +56,33 @@ rule vcf_to_dadi_sfs:
         sfs = DEMOGRAPHY_DIR / "mpusilla.4d.dadi.fs",
         popinfo = DEMOGRAPHY_DIR / "popinfo.txt"
     params:
-        group1_samples = GROUP1_SAMPLES,
-        group2_samples = GROUP2_SAMPLES,
+        group1_samples = " ".join(GROUP1_SAMPLES),
+        group2_samples = " ".join(GROUP2_SAMPLES),
+        n_group1 = len(GROUP1_SAMPLES),
+        n_group2 = len(GROUP2_SAMPLES),
         pop1_name = POP1_NAME,
         pop2_name = POP2_NAME,
         polarization = POLARIZATION
     log:
         DEMOGRAPHY_LOG_DIR / "vcf_to_dadi.log"
     conda: "../envs/dadi.yaml"
-    run:
-        import os
-
-        os.makedirs(str(DEMOGRAPHY_DIR), exist_ok=True)
-        os.makedirs(str(DEMOGRAPHY_LOG_DIR), exist_ok=True)
-
-        # Create population info file
-        with open(output.popinfo, 'w') as f:
-            for sample in params.group1_samples:
-                f.write(f"{sample}\t{params.pop1_name}\n")
-            for sample in params.group2_samples:
-                f.write(f"{sample}\t{params.pop2_name}\n")
-
-        n_group1 = len(params.group1_samples)
-        n_group2 = len(params.group2_samples)
-
-        # Note: dadi SFS creation typically uses easySFS or custom scripts
-        # This is a placeholder shell command for the full conversion
-        shell("""
+    shell:
+        """
         mkdir -p {DEMOGRAPHY_DIR}
         mkdir -p {DEMOGRAPHY_LOG_DIR}
+
+        : > {output.popinfo}
+        for sample in {params.group1_samples}; do
+            printf "%s\t%s\n" "$sample" "{params.pop1_name}" >> {output.popinfo}
+        done
+        for sample in {params.group2_samples}; do
+            printf "%s\t%s\n" "$sample" "{params.pop2_name}" >> {output.popinfo}
+        done
 
         # Use easySFS if available, otherwise fall back to custom script
         if command -v easySFS.py &> /dev/null; then
             easySFS.py -i {input.vcf} -p {output.popinfo} \
-                --proj {n_group1},{n_group2} \
+                --proj {params.n_group1},{params.n_group2} \
                 -o {DEMOGRAPHY_DIR}/easySFS_output \
                 2> {log}
 
@@ -101,7 +94,7 @@ rule vcf_to_dadi_sfs:
             echo "# Input VCF: {input.vcf}" >> {output.sfs}
             echo "# Populations: {params.pop1_name}, {params.pop2_name}" >> {output.sfs}
         fi
-        """)
+        """
 
 
 # ============================================================
@@ -195,7 +188,8 @@ rule plot_dadi_fit:
     input:
         bootstrap = DEMOGRAPHY_DIR / "model_fits.4d.bootstrap.txt"
     output:
-        pdf = FIGURES_DIR / "snp_popgen" / "dadi_model_fit.pdf"
+        pdf = FIGURES_DIR / "snp_popgen" / "dadi_model_fit.pdf",
+        png = FIGURES_DIR / "snp_popgen" / "dadi_model_fit.png"
     log:
         DEMOGRAPHY_LOG_DIR / "plot_dadi.log"
     conda: "../envs/dadi.yaml"

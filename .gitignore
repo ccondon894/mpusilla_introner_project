@@ -68,3 +68,6 @@ __pycache__/
 .cursor/
 # documents
 docs/
+
+completed.md
+tasks.md

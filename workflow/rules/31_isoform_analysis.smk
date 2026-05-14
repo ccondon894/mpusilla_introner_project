@@ -58,13 +58,15 @@ rule calculate_shannon_diversity:
     output:
         diversity = DIVERSITY_DIR / "shannon_diversity_per_gene.csv",
         summary = DIVERSITY_DIR / "shannon_diversity_summary.txt",
-        plot = FIGURES_DIR / "shannon_diversity_distribution.pdf"
+        plot = FIGURES_DIR / "shannon_diversity_distribution.pdf",
+        png = FIGURES_DIR / "shannon_diversity_distribution.png"
     params:
         mt_scaffold = MT_SCAFFOLD,
         mt_start = MT_START,
         mt_end = MT_END
     log:
         EXPRESSION_LOG_DIR / "shannon_diversity.log"
+    conda: "../envs/isoform_analysis.yaml"
     shell:
         """
         mkdir -p {DIVERSITY_DIR}
@@ -94,9 +96,11 @@ rule diversity_by_introner_status:
     output:
         comparison = DIVERSITY_DIR / "diversity_by_introner_status.csv",
         plot = FIGURES_DIR / "diversity_introner_comparison.pdf",
+        png = FIGURES_DIR / "diversity_introner_comparison.png",
         stats = DIVERSITY_DIR / "diversity_introner_stats.txt"
     log:
         EXPRESSION_LOG_DIR / "diversity_by_introner.log"
+    conda: "../envs/isoform_analysis.yaml"
     shell:
         """
         python {PROJECT_ROOT}/scripts/expression/shannon_diversity_analysis_consolidated.py \
@@ -153,12 +157,14 @@ rule analyze_nmd_predictions:
     output:
         analysis = NMD_DIR / "nmd_introner_analysis.txt",
         contingency = NMD_DIR / "nmd_contingency_tables.csv",
-        plot = FIGURES_DIR / "nmd_introner_association.pdf"
+        plot = FIGURES_DIR / "nmd_introner_association.pdf",
+        png = FIGURES_DIR / "nmd_introner_association.png"
     params:
         # Include only high-confidence structural categories
         categories = "full-splice_match,novel_in_catalog,novel_not_in_catalog"
     log:
         EXPRESSION_LOG_DIR / "nmd_analysis.log"
+    conda: "../envs/isoform_analysis.yaml"
     shell:
         """
         mkdir -p {NMD_DIR}
@@ -188,9 +194,11 @@ rule nmd_by_strain:
         gtf_rcc1749 = get_gtf("RCC1749")
     output:
         analysis = NMD_DIR / "nmd_by_strain_analysis.txt",
-        plot = FIGURES_DIR / "nmd_by_strain.pdf"
+        plot = FIGURES_DIR / "nmd_by_strain.pdf",
+        png = FIGURES_DIR / "nmd_by_strain.png"
     log:
         EXPRESSION_LOG_DIR / "nmd_by_strain.log"
+    conda: "../envs/isoform_analysis.yaml"
     shell:
         """
         python {PROJECT_ROOT}/scripts/expression/analyze_nmd_predictions.py \
@@ -219,6 +227,7 @@ rule count_isoforms_per_gene:
         counts = ISOFORM_DIR / "isoform_counts_per_gene.csv"
     log:
         EXPRESSION_LOG_DIR / "count_isoforms.log"
+    conda: "../envs/isoform_analysis.yaml"
     shell:
         """
         mkdir -p {ISOFORM_DIR}
@@ -266,6 +275,7 @@ rule prepare_isoform_data:
         mt_end = MT_END
     log:
         EXPRESSION_LOG_DIR / "prepare_isoform_data.log"
+    conda: "../envs/isoform_analysis.yaml"
     shell:
         """
         python {PROJECT_ROOT}/scripts/expression/prepare_isoform_data.py \

@@ -1,0 +1,15 @@
+name: expression
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - pandas
+  - numpy
+  - hisat2          # rule hisat2_index, hisat2_align
+  - samtools        # rule hisat2_align (sort, index)
+  - subread         # rule featurecounts_per_sample (provides featureCounts)
+  - stringtie       # rule stringtie_assemble, stringtie_merge
+  - gffread         # rule find_novel_orthologs (extract transcript sequences)
+  - blast           # rule find_novel_orthologs (makeblastdb, blastx)
+  - pip

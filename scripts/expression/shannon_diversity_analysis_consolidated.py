@@ -34,11 +34,35 @@ from matplotlib.backends.backend_pdf import PdfPages
 from scipy import stats
 import re
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings('ignore')
 
 # Structural categories to include
 INCLUDE_CATEGORIES = {'full-splice_match', 'novel_in_catalog', 'novel_not_in_catalog'}
+
+
+def save_figures_with_png(figures, output_path):
+    """Write a multi-page PDF and a single PNG contact sheet of the same figures."""
+    output_path = Path(output_path)
+    with PdfPages(output_path) as pdf:
+        for fig in figures:
+            pdf.savefig(fig)
+
+    if output_path.suffix.lower() == ".pdf" and figures:
+        rendered = []
+        for fig in figures:
+            fig.canvas.draw()
+            rendered.append(np.asarray(fig.canvas.buffer_rgba()))
+
+        fig_height = max(4, 3.5 * len(rendered))
+        summary_fig, axes = plt.subplots(len(rendered), 1, figsize=(12, fig_height), squeeze=False)
+        for ax, image in zip(axes.flatten(), rendered):
+            ax.imshow(image)
+            ax.axis("off")
+        summary_fig.tight_layout()
+        summary_fig.savefig(output_path.with_suffix(".png"), dpi=300, bbox_inches="tight")
+        plt.close(summary_fig)
 
 
 def calculate_shannon_index(proportions):
@@ -198,63 +222,60 @@ def run_default_mode(args):
         f.write(f"  Moderate (0.4-0.7): {moderate} ({moderate/len(shannon_df)*100:.1f}%)\n")
         f.write(f"  Low (J' < 0.4): {low} ({low/len(shannon_df)*100:.1f}%)\n")
 
-    # Generate PDF plot
     sns.set_style("whitegrid")
+    figures = []
 
-    with PdfPages(args.plot) as pdf:
-        # Shannon Index distribution
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.hist(shannon_df['shannon_index'], bins=50, color='#3498db',
-                alpha=0.7, edgecolor='black', linewidth=0.5)
-        ax.axvline(shannon_df['shannon_index'].mean(), color='red',
-                   linestyle='--', linewidth=2,
-                   label=f"Mean: {shannon_df['shannon_index'].mean():.3f}")
-        ax.axvline(shannon_df['shannon_index'].median(), color='green',
-                   linestyle='--', linewidth=2,
-                   label=f"Median: {shannon_df['shannon_index'].median():.3f}")
-        ax.set_xlabel('Shannon Index (H)', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Number of Genes', fontsize=12, fontweight='bold')
-        ax.set_title('Distribution of Shannon Diversity Index', fontsize=14, fontweight='bold')
-        ax.legend(fontsize=10)
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.close()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(shannon_df['shannon_index'], bins=50, color='#3498db',
+            alpha=0.7, edgecolor='black', linewidth=0.5)
+    ax.axvline(shannon_df['shannon_index'].mean(), color='red',
+               linestyle='--', linewidth=2,
+               label=f"Mean: {shannon_df['shannon_index'].mean():.3f}")
+    ax.axvline(shannon_df['shannon_index'].median(), color='green',
+               linestyle='--', linewidth=2,
+               label=f"Median: {shannon_df['shannon_index'].median():.3f}")
+    ax.set_xlabel('Shannon Index (H)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Number of Genes', fontsize=12, fontweight='bold')
+    ax.set_title('Distribution of Shannon Diversity Index', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    figures.append(fig)
 
-        # Shannon Evenness distribution
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.hist(shannon_df['shannon_evenness'].dropna(), bins=50,
-                color='#2ecc71', alpha=0.7, edgecolor='black', linewidth=0.5)
-        ax.axvline(shannon_df['shannon_evenness'].mean(), color='red',
-                   linestyle='--', linewidth=2,
-                   label=f"Mean: {shannon_df['shannon_evenness'].mean():.3f}")
-        ax.set_xlabel("Shannon Evenness (J')", fontsize=12, fontweight='bold')
-        ax.set_ylabel('Number of Genes', fontsize=12, fontweight='bold')
-        ax.set_title('Distribution of Shannon Evenness', fontsize=14, fontweight='bold')
-        ax.set_xlim(0, 1)
-        ax.legend(fontsize=10)
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.close()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(shannon_df['shannon_evenness'].dropna(), bins=50,
+            color='#2ecc71', alpha=0.7, edgecolor='black', linewidth=0.5)
+    ax.axvline(shannon_df['shannon_evenness'].mean(), color='red',
+               linestyle='--', linewidth=2,
+               label=f"Mean: {shannon_df['shannon_evenness'].mean():.3f}")
+    ax.set_xlabel("Shannon Evenness (J')", fontsize=12, fontweight='bold')
+    ax.set_ylabel('Number of Genes', fontsize=12, fontweight='bold')
+    ax.set_title('Distribution of Shannon Evenness', fontsize=14, fontweight='bold')
+    ax.set_xlim(0, 1)
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    figures.append(fig)
 
-        # FSM vs Novel dominant comparison
-        fsm_dom = shannon_df[shannon_df['dominant_category'] == 'full-splice_match']
-        novel_dom = shannon_df[shannon_df['dominant_category'] != 'full-splice_match']
+    fsm_dom = shannon_df[shannon_df['dominant_category'] == 'full-splice_match']
+    novel_dom = shannon_df[shannon_df['dominant_category'] != 'full-splice_match']
 
-        if len(fsm_dom) > 0 and len(novel_dom) > 0:
-            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-            for ax, metric, label in [(axes[0], 'shannon_index', 'Shannon Index (H)'),
-                                       (axes[1], 'shannon_evenness', "Shannon Evenness (J')")]:
-                bp = ax.boxplot([fsm_dom[metric].dropna(), novel_dom[metric].dropna()],
-                                labels=['FSM Dominant', 'Novel Dominant'],
-                                patch_artist=True)
-                for patch, color in zip(bp['boxes'], ['#2ecc71', '#e74c3c']):
-                    patch.set_facecolor(color)
-                    patch.set_alpha(0.7)
-                ax.set_ylabel(label, fontsize=12, fontweight='bold')
-                ax.grid(axis='y', alpha=0.3)
-            plt.tight_layout()
-            pdf.savefig(fig)
-            plt.close()
+    if len(fsm_dom) > 0 and len(novel_dom) > 0:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        for ax, metric, label in [(axes[0], 'shannon_index', 'Shannon Index (H)'),
+                                   (axes[1], 'shannon_evenness', "Shannon Evenness (J')")]:
+            bp = ax.boxplot([fsm_dom[metric].dropna(), novel_dom[metric].dropna()],
+                            labels=['FSM Dominant', 'Novel Dominant'],
+                            patch_artist=True)
+            for patch, color in zip(bp['boxes'], ['#2ecc71', '#e74c3c']):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+            ax.set_ylabel(label, fontsize=12, fontweight='bold')
+            ax.grid(axis='y', alpha=0.3)
+        fig.tight_layout()
+        figures.append(fig)
+
+    save_figures_with_png(figures, args.plot)
+    for fig in figures:
+        plt.close(fig)
 
     print(f"Shannon diversity calculated for {len(shannon_df)} genes")
     print(f"Output: {args.output}")
@@ -311,34 +332,31 @@ def run_compare_introner_mode(args):
             sig = "SIGNIFICANT" if r['p_val'] < 0.05 else "NOT SIGNIFICANT"
             f.write(f"  Mann-Whitney U: U={r['u_stat']:.1f}, p={r['p_val']:.4e} ({sig})\n\n")
 
-    # Generate PDF plot
     sns.set_style("whitegrid")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
-    with PdfPages(args.plot) as pdf:
-        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    for ax, metric, label in [
+        (axes[0], 'shannon_index', 'Shannon Index (H)'),
+        (axes[1], 'shannon_evenness', "Shannon Evenness (J')")
+    ]:
+        a = with_introner[metric].dropna()
+        b = without_introner[metric].dropna()
+        bp = ax.boxplot([a, b],
+                        labels=['With Introners', 'Without Introners'],
+                        patch_artist=True)
+        for patch, color in zip(bp['boxes'], ['#e74c3c', '#3498db']):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
 
-        for ax, metric, label in [
-            (axes[0], 'shannon_index', 'Shannon Index (H)'),
-            (axes[1], 'shannon_evenness', "Shannon Evenness (J')")
-        ]:
-            a = with_introner[metric].dropna()
-            b = without_introner[metric].dropna()
-            bp = ax.boxplot([a, b],
-                            labels=['With Introners', 'Without Introners'],
-                            patch_artist=True)
-            for patch, color in zip(bp['boxes'], ['#e74c3c', '#3498db']):
-                patch.set_facecolor(color)
-                patch.set_alpha(0.7)
+        r = results[metric]
+        ax.set_ylabel(label, fontsize=12, fontweight='bold')
+        ax.set_title(f'{label}\n(p = {r["p_val"]:.2e})',
+                     fontsize=12, fontweight='bold')
+        ax.grid(axis='y', alpha=0.3)
 
-            r = results[metric]
-            ax.set_ylabel(label, fontsize=12, fontweight='bold')
-            ax.set_title(f'{label}\n(p = {r["p_val"]:.2e})',
-                         fontsize=12, fontweight='bold')
-            ax.grid(axis='y', alpha=0.3)
-
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.close()
+    fig.tight_layout()
+    save_figures_with_png([fig], args.plot)
+    plt.close(fig)
 
     print(f"Comparison complete: {len(with_introner)} introner vs "
           f"{len(without_introner)} non-introner genes")
@@ -367,7 +385,7 @@ def main():
 
     # Common args
     parser.add_argument('--output', required=True, help='Output CSV')
-    parser.add_argument('--plot', required=True, help='Output PDF plot')
+    parser.add_argument('--plot', required=True, help='Output PDF plot (also writes sibling PNG)')
 
     args = parser.parse_args()
 

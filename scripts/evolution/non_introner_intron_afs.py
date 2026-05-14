@@ -26,6 +26,14 @@ import numpy as np
 import pysam
 
 
+def save_figure_with_png(output_path):
+    """Save the current matplotlib figure and emit a sibling PNG for PDF outputs."""
+    output_path = Path(output_path)
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    if output_path.suffix.lower() == ".pdf":
+        plt.savefig(output_path.with_suffix(".png"), dpi=300, bbox_inches="tight")
+
+
 # ── Stage 1: Extract introns from GTF ─────────────────────────────────────────
 
 def parse_gtf_attribute(attr_str, key="transcript_id"):
@@ -549,7 +557,7 @@ def plot_afs(folded_afs_minor_present, folded_afs_minor_absent, folded_n,
                          "Unfolded AFS — Outgroup: RCC1749 only")
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    save_figure_with_png(output_path)
     plt.close()
 
 
@@ -692,7 +700,7 @@ def main():
     parser.add_argument("--group2", required=True, help="Comma-separated Group 2 sample names")
     parser.add_argument("--reference", required=True, help="Reference sample name (must be in Group 1)")
     parser.add_argument("--output_matrix", required=True, help="Output genotype matrix TSV")
-    parser.add_argument("--output_afs", required=True, help="Output AFS plot PDF")
+    parser.add_argument("--output_afs", required=True, help="Output AFS plot PDF (also writes sibling PNG)")
     parser.add_argument("--output_summary", required=True, help="Output summary statistics")
     parser.add_argument("--coverage_dir", default=None,
                         help="Directory with {sample}.intron_coverage_calls.tsv files for coverage validation")

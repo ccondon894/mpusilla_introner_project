@@ -1,0 +1,14 @@
+name: glm_modeling
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - pandas
+  - numpy
+  - scipy
+  - matplotlib
+  - seaborn
+  - statsmodels     # poisson/negative binomial GLM fitting
+  - patsy           # formula API (Treatment contrasts)
+  - pip

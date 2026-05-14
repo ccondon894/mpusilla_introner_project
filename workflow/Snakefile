@@ -342,11 +342,11 @@ if LOAD_EXPRESSION:
             EXPRESSION_DIR / "glm_modeling" / "negative_binomial_glm_results.txt",
             # GO enrichment
             GO_DIR / "mappings" / "gene2go.json",
-            GO_DIR / "results" / "phase1_gene_classification.tsv",
-            GO_DIR / "results" / "phase2_enrichment_results.tsv",
+            GO_DIR / "results" / "introner_group_go_enrichment.tsv",
             # Key figures
             FIGURES_DIR / "shannon_diversity_distribution.pdf",
-            FIGURES_DIR / "go_enrichment_heatmap.pdf"
+            FIGURES_DIR / "go_enrichment_heatmap.pdf",
+            FIGURES_DIR / "go_enrichment_top_terms.pdf"
 
 
 # ============================================================
@@ -374,8 +374,9 @@ if LOAD_ALL:
             FIGURES_DIR / "pca.pdf",
             # Iteration 4: Expression & GO
             EXPRESSION_DIR / "counts" / "merged_counts_matrix.csv",
-            GO_DIR / "results" / "phase2_enrichment_results.tsv",
-            FIGURES_DIR / "go_enrichment_heatmap.pdf"
+            GO_DIR / "results" / "introner_group_go_enrichment.tsv",
+            FIGURES_DIR / "go_enrichment_heatmap.pdf",
+            FIGURES_DIR / "go_enrichment_top_terms.pdf"
 
 
 # ============================================================

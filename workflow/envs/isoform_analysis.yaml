@@ -1,0 +1,12 @@
+name: isoform_analysis
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - pandas
+  - numpy
+  - scipy           # fisher_exact, scipy.stats
+  - matplotlib
+  - seaborn
+  - pip
