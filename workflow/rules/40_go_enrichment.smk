@@ -7,8 +7,8 @@
 # 1. Generate GO mappings from multiple databases (Pfam, KO, TAIR, PANTHER)
 # 2. Enhance GO coverage by merging all sources
 # 3. Classify final-matrix introner loci as all introners, ancestral,
-#    independent insertion, polymorphic within Group 1, or consistently
-#    present within Group 1/2
+#    independent insertion, polymorphic within Group 1, consistently
+#    present within Group 1/2, or present introners from each sequence family
 # 4. Run full-GO and GO Slim enrichment and generate final figures
 #
 # Adapted from:
@@ -48,7 +48,7 @@ EGGNOG_PREFIX = config["params"]["go"].get("eggnog_prefix", "mp_ccmp1545")
 EGGNOG_CPUS = config["params"]["go"].get("eggnog_cpus", 16)
 EGGNOG_GO_EVIDENCE = config["params"]["go"].get("eggnog_go_evidence", "non-electronic")
 EGGNOG_TAX_SCOPE = config["params"]["go"].get("eggnog_tax_scope", "auto")
-EGGNOG_ENV = "workflow/envs/eggnog_mapper.yaml"
+EGGNOG_ENV = "../envs/eggnog_mapper.yaml"
 
 
 # ============================================================
@@ -134,7 +134,7 @@ rule parse_eggnog_to_gene2go:
     log:
         GO_LOG_DIR / "parse_eggnog_to_gene2go.log"
     conda:
-        EGGNOG_ENV
+        "../envs/go_enrichment.yaml"
     shell:
         """
         mkdir -p {GO_MAPPING_DIR}
@@ -347,6 +347,7 @@ rule introner_group_go_enrichment:
     - consistent_group1: presence=1 for every Group 1 sample
     - consistent_group2: presence=1 for every Group 2 sample
     - all_introners: presence=1 in at least one Group 1 or Group 2 sample
+    - family_N: genes containing at least one present introner from family N
 
     Missing calls (presence=3) are ignored for polymorphic and cross-group present
     evidence. Consistent groups require every configured sample in that group to
@@ -475,6 +476,159 @@ rule plot_introner_group_go_enrichment:
 
 
 # ============================================================
+# CDS-LENGTH-WEIGHTED PERMUTATION TEST
+# ============================================================
+
+rule all_introner_go_cds_length_permutation:
+    """
+    Empirical GO enrichment test for all introner-bearing genes.
+    """
+    input:
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
+        go_json = GO_MAPPING_DIR / "gene2go.json",
+        go_obo = PROJECT_ROOT / "resources" / "go.obo",
+        script = PROJECT_ROOT / "scripts" / "go_analysis" / "all_introner_go_cds_length_permutation.py",
+        classifier = PROJECT_ROOT / "scripts" / "go_analysis" / "introner_group_go_enrichment.py"
+    output:
+        enrichment = GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.tsv",
+        significant = GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.significant.tsv",
+        fisher_significant = GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.fisher_significant_with_empirical.tsv",
+        summary = GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.summary.txt"
+    params:
+        group1_samples = ",".join(GROUP1_SAMPLES),
+        group2_samples = ",".join(GROUP2_SAMPLES),
+        fdr_threshold = config["params"]["go"]["fdr_threshold"],
+        min_genes = config["params"]["go"]["min_genes"],
+        n_permutations = config["params"]["go"].get("permutation_n", 1000000),
+        batch_size = config["params"]["go"].get("permutation_batch_size", 1000),
+        seed = config["params"]["go"].get("permutation_seed", 20260521)
+    threads:
+        config["params"]["go"].get("permutation_threads", 8)
+    log:
+        GO_LOG_DIR / "all_introner_go_cds_length_permutation.log"
+    conda:
+        "../envs/go_enrichment.yaml"
+    shell:
+        """
+        mkdir -p {GO_RESULTS_DIR}
+        mkdir -p {GO_LOG_DIR}
+
+        python {input.script} \
+            --genotype-matrix {input.genotype_matrix} \
+            --gtf {input.gtf} \
+            --go-json {input.go_json} \
+            --go-obo {input.go_obo} \
+            --group1-samples {params.group1_samples} \
+            --group2-samples {params.group2_samples} \
+            --output {output.enrichment} \
+            --significant-output {output.significant} \
+            --fisher-significant-output {output.fisher_significant} \
+            --summary-output {output.summary} \
+            --fdr-threshold {params.fdr_threshold} \
+            --min-genes {params.min_genes} \
+            --n-permutations {params.n_permutations} \
+            --threads {threads} \
+            --batch-size {params.batch_size} \
+            --seed {params.seed} \
+            2> {log}
+        """
+
+
+rule introner_group_significant_go_cds_length_permutation:
+    """
+    Empirical GO test for all initially significant introner-group GO patterns.
+
+    For each row in introner_group_go_enrichment.significant.tsv, sample a
+    random gene set matching that introner group's GO/CDS-eligible study size,
+    with recipient-gene probability proportional to CDS length.
+    """
+    input:
+        observed = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.tsv",
+        gene_sets = GO_RESULTS_DIR / "introner_group_gene_sets.tsv",
+        gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
+        go_json = GO_MAPPING_DIR / "gene2go.json",
+        go_obo = PROJECT_ROOT / "resources" / "go.obo",
+        script = PROJECT_ROOT / "scripts" / "go_analysis" / "introner_group_significant_go_cds_length_permutation.py",
+        classifier = PROJECT_ROOT / "scripts" / "go_analysis" / "introner_group_go_enrichment.py"
+    output:
+        empirical = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.tsv",
+        empirical_significant = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.empirical_significant.tsv",
+        summary = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.summary.txt"
+    params:
+        fdr_threshold = config["params"]["go"]["fdr_threshold"],
+        n_permutations = config["params"]["go"].get("permutation_n", 1000000),
+        batch_size = config["params"]["go"].get("permutation_batch_size", 1000),
+        seed = config["params"]["go"].get("permutation_seed", 20260521)
+    threads:
+        config["params"]["go"].get("permutation_threads", 8)
+    log:
+        GO_LOG_DIR / "introner_group_go_significant_cds_length_permutation.log"
+    conda:
+        "../envs/go_enrichment.yaml"
+    shell:
+        """
+        mkdir -p {GO_RESULTS_DIR}
+        mkdir -p {GO_LOG_DIR}
+
+        python {input.script} \
+            --observed-significant {input.observed} \
+            --gene-sets {input.gene_sets} \
+            --gtf {input.gtf} \
+            --go-json {input.go_json} \
+            --go-obo {input.go_obo} \
+            --output {output.empirical} \
+            --empirical-significant-output {output.empirical_significant} \
+            --summary-output {output.summary} \
+            --fdr-threshold {params.fdr_threshold} \
+            --n-permutations {params.n_permutations} \
+            --threads {threads} \
+            --batch-size {params.batch_size} \
+            --seed {params.seed} \
+            2> {log}
+        """
+
+
+rule summarize_introner_group_unique_go_terms:
+    """
+    Identify empirically supported subgroup GO terms not captured by all_introners.
+
+    Exact-unique terms are absent from the all_introners significant set.
+    Ontology-unique terms are also not descendants of any all_introners
+    significant GO term.
+    """
+    input:
+        empirical = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.tsv",
+        go_obo = PROJECT_ROOT / "resources" / "go.obo",
+        script = PROJECT_ROOT / "scripts" / "go_analysis" / "summarize_introner_group_unique_go_terms.py",
+        classifier = PROJECT_ROOT / "scripts" / "go_analysis" / "introner_group_go_enrichment.py"
+    output:
+        annotated = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.unique_vs_all_introners.tsv",
+        ontology_unique = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.ontology_unique_vs_all_introners.tsv",
+        summary = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.unique_vs_all_introners.summary.txt"
+    params:
+        base_group = "all_introners"
+    log:
+        GO_LOG_DIR / "introner_group_unique_go_terms.log"
+    conda:
+        "../envs/go_enrichment.yaml"
+    shell:
+        """
+        mkdir -p {GO_RESULTS_DIR}
+        mkdir -p {GO_LOG_DIR}
+
+        python {input.script} \
+            --empirical-go {input.empirical} \
+            --go-obo {input.go_obo} \
+            --output {output.annotated} \
+            --unique-output {output.ontology_unique} \
+            --summary-output {output.summary} \
+            --base-group {params.base_group} \
+            2> {log}
+        """
+
+
+# ============================================================
 # TARGET RULES
 # ============================================================
 
@@ -531,3 +685,35 @@ rule introner_group_go_enrichment_complete:
         GO_RESULTS_DIR / "introner_group_go_slim_enrichment.summary.txt",
         FIGURES_DIR / "go_enrichment_heatmap.pdf",
         FIGURES_DIR / "go_enrichment_top_terms.pdf"
+
+
+rule all_introner_go_permutation_complete:
+    """
+    Target: CDS-length-weighted permutation GO test for all introner genes.
+    """
+    input:
+        GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.tsv",
+        GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.significant.tsv",
+        GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.fisher_significant_with_empirical.tsv",
+        GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.summary.txt"
+
+
+rule introner_group_significant_go_permutation_complete:
+    """
+    Target: CDS-length-weighted permutation test for all initially significant
+    introner-group GO enrichment/depletion rows.
+    """
+    input:
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.empirical_significant.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.summary.txt"
+
+
+rule introner_group_unique_go_terms_complete:
+    """
+    Target: Summarize subgroup-specific GO terms relative to all_introners.
+    """
+    input:
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.unique_vs_all_introners.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.ontology_unique_vs_all_introners.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.unique_vs_all_introners.summary.txt"

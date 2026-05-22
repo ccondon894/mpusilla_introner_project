@@ -18,10 +18,10 @@ from scipy.stats import fisher_exact
 from statsmodels.stats.multitest import multipletests
 
 from introner_group_go_enrichment import (
-    INTRONER_GROUPS,
     build_background,
     classify_loci,
     load_gene2go,
+    ordered_group_names,
     parse_csv_arg,
     parse_obo,
     propagate_gene2go,
@@ -95,7 +95,7 @@ def build_slim_to_genes(background_genes, gene2go, terms, min_genes):
 
 def run_slim_enrichment(gene_set_df, background_genes, slim_to_genes, terms, fdr_threshold):
     rows = []
-    for group_name in INTRONER_GROUPS:
+    for group_name in ordered_group_names(gene_set_df):
         if gene_set_df.empty:
             study_genes = set()
         else:
@@ -178,7 +178,7 @@ def write_summary(path, genotype_file, go_jsons, group1_samples, group2_samples,
         handle.write(f"Background genes with GO terms: {len(background_genes)}\n")
         handle.write(f"GO Slim categories tested: {len(slim_to_genes)}\n\n")
 
-        for group_name in INTRONER_GROUPS:
+        for group_name in ordered_group_names(gene_set_df):
             loci = locus_df["introner_groups"].fillna("").str.contains(group_name, regex=False).sum()
             if gene_set_df.empty:
                 group_genes = set()

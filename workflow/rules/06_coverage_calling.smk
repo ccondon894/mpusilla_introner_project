@@ -148,6 +148,15 @@ rule update_genotype_matrix_with_coverage:
     Incorporates coverage-based calls into the genotype matrix,
     potentially upgrading missing data (3) to presence (1) or
     absence (2) calls based on read evidence.
+
+    Also appends derived, paper-facing classification columns that separate:
+      - per-group counts and callability
+      - per-group presence pattern
+      - within-group orthology confidence
+      - cross-group origin and confidence
+
+    The legacy within_group_status / cross_group_status columns are retained
+    for downstream compatibility.
     """
     input:
         gt_matrix = GENOTYPING_DIR / "genotype_matrix.tsv",
@@ -208,6 +217,36 @@ rule introner_family_distribution_plot:
         """
 
 
+rule introner_2d_afs_plot:
+    """
+    Plot the introner-present 2D AFS from the final genotype matrix.
+
+    Excludes independent insertion classes from the cross-group comparison.
+    """
+    input:
+        matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+    output:
+        pdf = FIGURES_DIR / "genotyping" / "introner_2d_afs_present_count.pdf",
+        png = FIGURES_DIR / "genotyping" / "introner_2d_afs_present_count.png",
+        tsv = GENOTYPING_DIR / "introner_2d_afs_present_count.tsv",
+        summary = GENOTYPING_DIR / "introner_2d_afs_present_count_summary.txt"
+    params:
+        group1 = ' '.join(GROUP1_SAMPLES),
+        group2 = ' '.join(GROUP2_SAMPLES)
+    shell:
+        """
+        mkdir -p $(dirname {output.png}) $(dirname {output.tsv})
+        python {PROJECT_ROOT}/scripts/genotyping/plot_introner_2d_afs.py \
+            --genotype-matrix {input.matrix} \
+            --group1-samples {params.group1} \
+            --group2-samples {params.group2} \
+            --output-pdf {output.pdf} \
+            --output-png {output.png} \
+            --output-tsv {output.tsv} \
+            --summary {output.summary}
+        """
+
+
 # Target Rules
 
 rule all_coverage_calling:
@@ -217,7 +256,8 @@ rule all_coverage_calling:
     input:
         GENOTYPING_DIR / "genotype_matrix.final.tsv",
         GENOTYPING_DIR / "genotype_matrix_summary.txt",
-        FIGURES_DIR / "genotyping" / "introner_family_distributions.png"
+        FIGURES_DIR / "genotyping" / "introner_family_distributions.png",
+        FIGURES_DIR / "genotyping" / "introner_2d_afs_present_count.png"
 
 
 rule coverage_calls_only:

@@ -2,9 +2,9 @@
 """
 Generate summary statistics for the final genotype matrix.
 
-Reports ortholog group counts, within- and cross-group classification
-breakdowns (from within_group_status / cross_group_status columns),
-gene occupancy, family frequency composition, and shared locus statistics.
+Reports ortholog group counts, derived per-group callability/pattern
+breakdowns, legacy within- and cross-group status counts, gene occupancy,
+family frequency composition, and shared locus statistics.
 """
 
 import argparse
@@ -54,6 +54,7 @@ def main():
     # Classification breakdowns derived from the new status columns
     # One classification per ortholog group (collapse duplicate rows)
     group_status = df.drop_duplicates('ortholog_id').set_index('ortholog_id')
+    total_groups = len(all_loci)
     within_status_counts = Counter(group_status['within_group_status'].fillna(''))
     cross_status_counts = Counter(group_status['cross_group_status'].fillna('NA'))
     # Treat empty string as NA for cross_group_status (annotate step may
@@ -101,6 +102,13 @@ def main():
     g1_fam_counts = family_frequencies(g1_loci, present, group1_set)
     g2_fam_counts = family_frequencies(g2_loci, present, group2_set)
 
+    has_derived = {
+        'group1_pattern', 'group2_pattern',
+        'group1_callability', 'group2_callability',
+        'within_group_orthology_confidence',
+        'cross_group_origin', 'cross_group_confidence',
+    }.issubset(group_status.columns)
+
     # Write output
     with open(args.output, 'w') as f:
         f.write("=" * 64 + "\n")
@@ -126,9 +134,30 @@ def main():
         f.write(f"\n")
 
         # Section 3: Within-group classification status
-        f.write("3. WITHIN-GROUP STATUS\n")
+        f.write("3. DERIVED GROUP PATTERNS AND CONFIDENCE\n")
         f.write("-" * 40 + "\n")
-        total_groups = len(all_loci)
+        if has_derived:
+            for label, col in [('Group 1 pattern', 'group1_pattern'),
+                               ('Group 2 pattern', 'group2_pattern'),
+                               ('Group 1 callability', 'group1_callability'),
+                               ('Group 2 callability', 'group2_callability'),
+                               ('Within-group orthology confidence',
+                                'within_group_orthology_confidence'),
+                               ('Cross-group origin', 'cross_group_origin'),
+                               ('Cross-group confidence', 'cross_group_confidence')]:
+                f.write(f"{label}:\n")
+                counts = Counter(group_status[col].fillna('NA'))
+                for status, count in sorted(counts.items(),
+                                            key=lambda kv: (-kv[1], str(kv[0]))):
+                    pct = 100 * count / total_groups if total_groups else 0
+                    f.write(f"  {status:<26s} {count:>7,d}  ({pct:5.1f}%)\n")
+                f.write("\n")
+        else:
+            f.write("Derived classification columns not present in matrix.\n\n")
+
+        # Section 4: Legacy within-group classification status
+        f.write("4. LEGACY WITHIN-GROUP STATUS\n")
+        f.write("-" * 40 + "\n")
         within_order = ['consistent', 'singleton', 'low_identity',
                         'discordant', 'uncertain']
         for status in within_order:
@@ -145,8 +174,8 @@ def main():
         f.write(f"  {'TOTAL':<22s}  {total_groups:>7,d}\n")
         f.write(f"\n")
 
-        # Section 4: Cross-group classification (ancestral vs independent)
-        f.write("4. CROSS-GROUP STATUS (ancestral vs independent)\n")
+        # Section 5: Cross-group classification (ancestral vs independent)
+        f.write("5. LEGACY CROSS-GROUP STATUS (ancestral vs independent)\n")
         f.write("-" * 40 + "\n")
         na_count = cross_status_counts.get('NA', 0)
         cross_group_total = total_groups - na_count
@@ -179,8 +208,8 @@ def main():
             f.write(f"  Present in neither:   {na_neither:,}\n")
         f.write(f"\n")
 
-        # Section 5: Gene occupancy
-        f.write("5. GENE OCCUPANCY\n")
+        # Section 6: Gene occupancy
+        f.write("6. GENE OCCUPANCY\n")
         f.write("-" * 40 + "\n")
         f.write(f"Note: gene annotations from validation step; may be unreliable.\n")
         f.write(f"Group 1: {g1_in_gene:,}/{g1_gene_total:,} "
@@ -189,8 +218,8 @@ def main():
                 f"({100*g2_in_gene/g2_gene_total:.1f}%) within annotated genes\n")
         f.write(f"\n")
 
-        # Section 6: Family frequency composition
-        f.write("6. FAMILY FREQUENCY COMPOSITION\n")
+        # Section 7: Family frequency composition
+        f.write("7. FAMILY FREQUENCY COMPOSITION\n")
         f.write("-" * 40 + "\n")
         all_families = sorted(set(g1_fam_counts.keys()) | set(g2_fam_counts.keys()))
         g1_fam_total = sum(g1_fam_counts.values())

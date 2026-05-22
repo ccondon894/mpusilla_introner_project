@@ -31,6 +31,10 @@ def load_fasta_sequences(fasta_dir, flank_length):
 ANCESTRAL_CROSS_GROUP = {
     'ancestral', 'likely_ancestral', 'ancestral_low_identity',
 }
+INDEPENDENT_CROSS_GROUP = {
+    'independent', 'likely_independent',
+}
+CLASSIFIED_CROSS_GROUP = ANCESTRAL_CROSS_GROUP | INDEPENDENT_CROSS_GROUP
 
 
 def _cross_group_value(ortholog_df):
@@ -60,17 +64,18 @@ def classify_all_samples_orthologs(df, group1, group2):
     """
     Classify ortholog groups by fixation patterns between Group1 and Group2.
 
-    Applies ancestry-aware filtering:
+    Applies conservative callability/orthology filtering:
     - Drops any group where within_group_status == 'low_identity' (suspicious
       ortholog grouping, likely paralog mismerge or partial deletion).
-    - For the group1_fixed_group2_fixed category, additionally requires
-      cross_group_status in ANCESTRAL_CROSS_GROUP so Dxy is computed only on
-      orthologs with evidence of shared ancestry (not convergent insertions
-      at the same locus).
+    - Drops any group with missing calls in either population.
+    - For the group1_fixed_group2_fixed category, keeps both ancestral-class
+      and independent-class shared loci. "Shared" is therefore a presence
+      state (fixed present in both groups), while cross_group_status preserves
+      the inferred origin for downstream splitting.
     """
     classification = {}
     skipped_low_identity = 0
-    skipped_non_ancestral = 0
+    skipped_unclassified_fixed_shared = 0
 
     # Get unique ortholog IDs
     ortholog_ids = df['ortholog_id'].unique()
@@ -124,13 +129,14 @@ def classify_all_samples_orthologs(df, group1, group2):
             # Skip cases that don't match strict fixation patterns
             continue
 
-        # For fixed_fixed (both clades have the introner), require cross-group
-        # evidence of shared ancestry. Clade-specific categories don't have
-        # cross-group members so this filter doesn't apply to them.
+        # For fixed_fixed (both clades have the introner), require a classified
+        # cross-group origin but keep both ancestral and independent origins.
+        # Clade-specific categories do not have cross-group members, so this
+        # filter does not apply to them.
         cross_status = _cross_group_value(ortholog_df)
         if category == "group1_fixed_group2_fixed":
-            if cross_status not in ANCESTRAL_CROSS_GROUP:
-                skipped_non_ancestral += 1
+            if cross_status not in CLASSIFIED_CROSS_GROUP:
+                skipped_unclassified_fixed_shared += 1
                 continue
         else:
             # Clade-specific: no cross-group comparison possible
@@ -150,7 +156,7 @@ def classify_all_samples_orthologs(df, group1, group2):
         }
 
     print(f"  Skipped {skipped_low_identity} low_identity groups")
-    print(f"  Skipped {skipped_non_ancestral} non-ancestral fixed_fixed groups")
+    print(f"  Skipped {skipped_unclassified_fixed_shared} unclassified fixed_fixed groups")
     return classification
 
 def prepare_all_samples_fasta_files(df, fasta_dict, classification, output_dir, group1, group2, flank_length):

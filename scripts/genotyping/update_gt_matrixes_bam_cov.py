@@ -13,6 +13,125 @@ gt_matrix_out = sys.argv[3]
 
 gt_df = pd.read_csv(gt_matrix_file, sep="\t", header=0)
 
+
+def _clean_status(value):
+    if pd.isna(value) or value == '' or value == 'NA':
+        return 'NA'
+    return str(value)
+
+
+def _group_pattern(present, absent, missing):
+    callable_count = present + absent
+    if callable_count == 0:
+        return 'no_call'
+    if present == 0:
+        return 'absent'
+    if absent == 0 and missing == 0:
+        return 'fixed_present'
+    if absent == 0:
+        return 'present_with_missing'
+    if present == 1:
+        return 'singleton_present'
+    if absent == 1:
+        return 'singleton_absent'
+    return 'polymorphic'
+
+
+def _within_orthology_confidence(status):
+    status = _clean_status(status)
+    if status in {'consistent', 'singleton'}:
+        return 'high'
+    if status == 'low_identity':
+        return 'low_identity'
+    if status in {'discordant', 'uncertain'}:
+        return status
+    return 'unknown'
+
+
+def _cross_group_origin(status):
+    status = _clean_status(status)
+    if status in {'ancestral', 'likely_ancestral', 'ancestral_low_identity'}:
+        return 'ancestral'
+    if status in {'independent', 'likely_independent'}:
+        return 'independent'
+    if status == 'uncertain':
+        return 'ambiguous'
+    return 'not_applicable'
+
+
+def _cross_group_confidence(status):
+    status = _clean_status(status)
+    if status in {'ancestral', 'independent'}:
+        return 'high'
+    if status in {'likely_ancestral', 'likely_independent'}:
+        return 'moderate'
+    if status == 'ancestral_low_identity':
+        return 'low_identity'
+    if status == 'uncertain':
+        return 'low'
+    return 'not_applicable'
+
+
+def add_derived_classification_columns(df):
+    """Add explicit, paper-facing classification columns.
+
+    The legacy status columns are intentionally preserved for downstream
+    compatibility. These derived columns separate per-group callability and
+    frequency pattern from orthology confidence and cross-group origin.
+    """
+    group2 = set(GROUP2_SAMPLES)
+    all_samples = sorted(df['sample'].dropna().unique())
+    group1 = [s for s in all_samples if s not in group2]
+    group2 = [s for s in all_samples if s in group2]
+
+    derived = {}
+    first_rows = df.drop_duplicates('ortholog_id').set_index('ortholog_id')
+
+    for oid, group in df.groupby('ortholog_id', sort=False):
+        record = {}
+        for label, samples in [('group1', group1), ('group2', group2)]:
+            calls = group.loc[group['sample'].isin(samples), 'presence']
+            present = int((calls == 1).sum())
+            absent = int((calls == 2).sum())
+            missing = int((calls == 3).sum())
+            callable_count = present + absent
+            n_samples = len(calls)
+            record[f'{label}_present_count'] = present
+            record[f'{label}_absent_count'] = absent
+            record[f'{label}_missing_count'] = missing
+            record[f'{label}_callable_count'] = callable_count
+            record[f'{label}_n_samples'] = n_samples
+            record[f'{label}_callability'] = (
+                'complete' if missing == 0 else
+                'partial' if callable_count > 0 else
+                'none'
+            )
+            record[f'{label}_pattern'] = _group_pattern(present, absent, missing)
+
+        first = first_rows.loc[oid]
+        within_status = first.get('within_group_status', '')
+        cross_status = first.get('cross_group_status', '')
+        record['within_group_orthology_confidence'] = (
+            _within_orthology_confidence(within_status)
+        )
+        record['cross_group_origin'] = _cross_group_origin(cross_status)
+        record['cross_group_confidence'] = _cross_group_confidence(cross_status)
+        record['present_in_both_groups'] = (
+            record['group1_present_count'] > 0 and
+            record['group2_present_count'] > 0
+        )
+        derived[oid] = record
+
+    derived_df = pd.DataFrame.from_dict(derived, orient='index')
+    derived_df.index.name = 'ortholog_id'
+
+    # Replace these derived columns if re-running on an already annotated file.
+    for col in derived_df.columns:
+        if col in df.columns:
+            df = df.drop(columns=[col])
+
+    return df.merge(derived_df.reset_index(), on='ortholog_id', how='left')
+
 # update genotype matrix with new calls
 for file in os.listdir(bed_path):
     if file.endswith("coverage_calls.bed"):
@@ -128,6 +247,8 @@ if 'family' in gt_df.columns:
         except Exception as e:
             print(f"Warning: Could not fully convert family column: {e}")
             # Keep as is if conversion fails
+
+gt_df = add_derived_classification_columns(gt_df)
 
 # Debug information
 print(f"Column dtypes after conversion: {gt_df.dtypes}")
