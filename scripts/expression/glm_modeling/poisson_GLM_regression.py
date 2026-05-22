@@ -2,7 +2,8 @@
 """
 Poisson GLM Regression Analysis: Effect of Introners on Isoform Diversity
 
-Model: n_isoforms ~ C(strain) + introner_gain + introner_loss + log_expression
+Model: n_isoforms ~ C(strain) + introner_gain + introner_loss +
+                  baseline_introner_count + log_expression + log_cds_length
 Family: Poisson (log link)
 
 Usage (Snakemake):
@@ -75,12 +76,15 @@ def main():
         if 'mean_expression' in data.columns:
             data['log_expression'] = np.log(data['mean_expression'] + 1)
 
-    # Build formula
-    has_expr = 'log_expression' in data.columns
-    if has_expr:
-        formula = 'n_isoforms ~ C(strain) + introner_gain + introner_loss + log_expression'
-    else:
-        formula = 'n_isoforms ~ C(strain) + introner_gain + introner_loss'
+    if 'log_cds_length' not in data.columns and 'cds_length' in data.columns:
+        data['log_cds_length'] = np.log(data['cds_length'])
+
+    # Build formula to match the older manuscript-facing model.
+    formula_parts = ['C(strain)', 'introner_gain', 'introner_loss']
+    for var in ['baseline_introner_count', 'log_expression', 'log_cds_length']:
+        if var in data.columns:
+            formula_parts.append(var)
+    formula = 'n_isoforms ~ ' + ' + '.join(formula_parts)
 
     # Fit Poisson GLM
     print(f"Fitting: {formula}")
@@ -173,7 +177,7 @@ def main():
         # Key findings
         f.write("Key Findings:\n")
         f.write("=" * 80 + "\n")
-        for var in ['introner_gain', 'introner_loss']:
+        for var in ['baseline_introner_count', 'introner_gain', 'introner_loss']:
             if var in best_model.params.index:
                 coef = best_model.params[var]
                 pval = best_model.pvalues[var]

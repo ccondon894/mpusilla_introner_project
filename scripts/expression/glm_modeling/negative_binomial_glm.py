@@ -5,7 +5,7 @@ Negative Binomial GLM: Gene Expression Prediction with Library Size Normalizatio
 Reads a pre-merged CSV (from prepare_expression_data inline rule) containing:
   gene_id, replicate, raw_count, library_size, log_library_size,
   strain, introner_gain, introner_loss, baseline_introner_count,
-  log_cds_length, n_isoforms
+  log_cds_length, n_isoforms, GC_content
 
 Usage (Snakemake):
     python negative_binomial_glm.py \
@@ -75,18 +75,14 @@ def main():
     if 'log_cds_length' not in merged.columns and 'cds_length' in merged.columns:
         merged['log_cds_length'] = np.log(merged['cds_length'])
 
-    # Build formula - only include available columns
+    # Build formula to match the older manuscript-facing model.
     ref = args.reference
     formula_parts = [f"C(strain, Treatment(reference='{ref}'))"]
 
     for var in ['introner_gain', 'introner_loss', 'baseline_introner_count',
-                'log_cds_length', 'n_isoforms']:
+                'log_cds_length', 'n_isoforms', 'GC_content']:
         if var in merged.columns:
             formula_parts.append(var)
-
-    # Include GC_content only if available
-    if 'GC_content' in merged.columns:
-        formula_parts.append('GC_content')
 
     formula = 'raw_count ~ ' + ' + '.join(formula_parts)
     print(f"Formula: {formula}")
@@ -160,6 +156,15 @@ def main():
         f.write(f"  Mean: {merged['library_size'].mean():,.0f}\n")
         f.write(f"  Range: {merged['library_size'].min():,.0f} - "
                 f"{merged['library_size'].max():,.0f}\n\n")
+
+        f.write("Gene Features:\n")
+        for col in ['baseline_introner_count', 'introner_gain', 'introner_loss',
+                    'log_cds_length', 'n_isoforms', 'GC_content']:
+            if col in merged.columns:
+                f.write(f"  {col}: mean={merged[col].mean():.4f}, "
+                        f"median={merged[col].median():.4f}, "
+                        f"range={merged[col].min():.4f}-{merged[col].max():.4f}\n")
+        f.write("\n")
 
         f.write("=" * 80 + "\n")
         f.write("MODEL RESULTS\n")

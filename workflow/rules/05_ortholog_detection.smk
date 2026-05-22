@@ -482,10 +482,11 @@ rule fix_orientations:
 
 rule classify_sharing_status:
     """
-    Classify sharing status for introner ortholog groups.
+    Classify insertion-site sharing status for introner ortholog groups.
 
     Compares codon-level insertion fingerprints within each ortholog group
-    to produce two independent classifications:
+    to produce legacy insertion-site classifications. These columns describe
+    orthology/insertion-site evidence, not final per-group callability:
 
     within_group_status (consistency within each clade):
       - consistent:  fingerprints agree within each clade
@@ -678,17 +679,20 @@ rule reclassify_after_cross_split:
 
 rule compare_introner_sequences:
     """
-    Refine within_group_status and cross_group_status using body sequence identity.
+    Refine insertion-site status columns using body sequence identity.
 
     Extracts introner body sequences from indexed genome FASTAs and computes
-    pairwise identity. Overwrites the codon-level status columns with refined
-    values using two thresholds:
+    pairwise identity. Overwrites the legacy codon-level status columns with
+    refined values using two thresholds:
       - within-group identity (default 0.80): resolves uncertain intergenic
         groups to consistent (if same family + high identity), flags low_identity
       - cross-group identity (default 0.60): resolves uncertain cross-group
         cases to likely_ancestral/likely_independent
 
     Adds audit columns: within_group_identity, cross_group_identity.
+
+    Paper-facing per-group pattern/callability columns are added after coverage
+    validation in 06_coverage_calling.smk, when final presence calls are known.
     """
     input:
         verified_matrix = GENOTYPING_DIR / "genotype_matrix.cross_split_verified.tsv",

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Create a 2-panel boxplot figure for all-samples Dxy analysis.
+Create a 2-panel violin plot figure for all-samples Dxy analysis.
 
-Panel A uses both the all-samples flanking metrics (clade-specific boxes)
-and the shared introner Dxy (ancestral vs independent). Panel B uses only
-the shared introner Dxy for body-level comparison.
+Panel A uses the active all-samples flanking metrics. Panel B uses the active
+fixed-shared introner body Dxy metrics.
 
 `ancestral` collapses {ancestral, likely_ancestral, ancestral_low_identity};
 `independent` collapses {independent, likely_independent}.
@@ -36,8 +35,8 @@ def parse_arguments():
         description='Create Dxy boxplot panels for all-samples diversity analysis')
     parser.add_argument('--input', required=True,
                        help='All-samples diversity metrics TSV (flanking Dxy)')
-    parser.add_argument('--shared-dxy', required=True,
-                       help='Shared introner divergence TSV (introner body + flank Dxy)')
+    parser.add_argument('--body-dxy', required=True,
+                       help='Fixed shared introner body Dxy TSV')
     parser.add_argument('--output', required=True,
                        help='Output PNG file')
     parser.add_argument('--flank_length', required=True,
@@ -186,11 +185,23 @@ def main():
     print(f"Loading flanking diversity metrics from {args.input}")
     flanking_df = pd.read_csv(args.input, sep='\t')
 
-    print(f"Loading shared introner Dxy from {args.shared_dxy}")
-    shared_df = pd.read_csv(args.shared_dxy, sep='\t')
+    print(f"Loading fixed shared introner body Dxy from {args.body_dxy}")
+    body_df = pd.read_csv(args.body_dxy, sep='\t')
 
-    ancestral_df = shared_df[shared_df['ancestry_class'] == 'ancestral']
-    independent_df = shared_df[shared_df['ancestry_class'] == 'independent']
+    shared_flank_df = flanking_df[flanking_df['category'] == 'group1_fixed_group2_fixed']
+    ancestral_flank_df = shared_flank_df[
+        shared_flank_df['cross_group_status'].isin([
+            'ancestral', 'likely_ancestral', 'ancestral_low_identity'
+        ])
+    ]
+    independent_flank_df = shared_flank_df[
+        shared_flank_df['cross_group_status'].isin([
+            'independent', 'likely_independent'
+        ])
+    ]
+
+    ancestral_body_df = body_df[body_df['ancestry_class'] == 'ancestral']
+    independent_body_df = body_df[body_df['ancestry_class'] == 'independent']
 
     # ---- Panel A: Flanking Dxy ----
     print("\n=== Panel A: Flanking Dxy ===")
@@ -199,9 +210,9 @@ def main():
     g1_present_g2_absent = flanking_df[flanking_df['category'] == 'group1_fixed_group2_absent']['dxy_group1_group2'].dropna().tolist()
     g1_absent_g2_present = flanking_df[flanking_df['category'] == 'group1_absent_group2_fixed']['dxy_group1_group2'].dropna().tolist()
 
-    # Cross-group shared boxes from the shared introner Dxy TSV
-    ancestral_flank = ancestral_df['dxy_flank_mean'].dropna().tolist()
-    independent_flank = independent_df['dxy_flank_mean'].dropna().tolist()
+    # Cross-group shared boxes from the active all-samples flanking metrics TSV
+    ancestral_flank = ancestral_flank_df['dxy_group1_group2'].dropna().tolist()
+    independent_flank = independent_flank_df['dxy_group1_group2'].dropna().tolist()
 
     panel_a_data = {
         'g1_present_g2_absent': g1_present_g2_absent,
@@ -219,6 +230,7 @@ def main():
 
     panel_a_comparisons = [
         ('g1_present_g2_absent', 'g1_absent_g2_present'),
+        ('g1_absent_g2_present', 'ancestral'),
         ('ancestral', 'independent'),
     ]
 
@@ -232,8 +244,8 @@ def main():
     # ---- Panel B: Introner Body Dxy ----
     print("\n=== Panel B: Introner Body Dxy (ancestral vs independent) ===")
 
-    ancestral_body = ancestral_df['dxy_introner'].dropna().tolist()
-    independent_body = independent_df['dxy_introner'].dropna().tolist()
+    ancestral_body = ancestral_body_df['dxy_introner'].dropna().tolist()
+    independent_body = independent_body_df['dxy_introner'].dropna().tolist()
 
     panel_b_data = {
         'ancestral': ancestral_body,

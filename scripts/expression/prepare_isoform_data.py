@@ -3,7 +3,8 @@
 Prepare isoform count data for regression analysis.
 
 Merges isoform counts, introner features (from genotype matrix),
-CDS lengths (from GTF), and mean expression (from featureCounts counts matrix).
+CDS lengths (from GTF), and library-size normalized expression from the
+featureCounts count matrix.
 
 Usage (Snakemake):
     python prepare_isoform_data.py \
@@ -122,6 +123,12 @@ def derive_introner_features(genotype_matrix_path, reference='CCMP1545'):
 def compute_mean_expression(counts_matrix_path):
     """
     Compute mean expression per gene per strain from featureCounts merged matrix.
+
+    The negative-binomial expression model uses raw counts with log library size
+    as an offset. For gene-level summaries and plotting, use the same rate logic
+    by converting each replicate to counts per million mapped reads before
+    averaging replicates within strain.
+
     Returns DataFrame with columns: gene_id, strain, mean_expression, log_expression
     """
     counts = pd.read_csv(counts_matrix_path, index_col=0)
@@ -130,6 +137,8 @@ def compute_mean_expression(counts_matrix_path):
     drop_cols = [c for c in counts.columns
                  if c in ('Length', 'Chr', 'Start', 'End', 'Strand')]
     sample_cols = [c for c in counts.columns if c not in drop_cols]
+    library_sizes = counts[sample_cols].sum()
+    normalized_counts = counts[sample_cols].div(library_sizes, axis=1) * 1_000_000
 
     # Map replicate to strain
     strain_map = {}
@@ -146,7 +155,7 @@ def compute_mean_expression(counts_matrix_path):
         strain_cols = [c for c in sample_cols if strain_map.get(c) == strain]
         if not strain_cols:
             continue
-        mean_expr = counts[strain_cols].mean(axis=1)
+        mean_expr = normalized_counts[strain_cols].mean(axis=1)
         gene_expr = pd.DataFrame({
             'gene_id': counts.index,
             'strain': strain,

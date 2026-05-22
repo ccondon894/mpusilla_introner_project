@@ -313,8 +313,6 @@ checkpoint classify_all_samples_orthologs:
         ),
         gt_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
-        alignment_dir_100bp = directory(ALIGNMENT_DIR / "100bp"),
-        alignment_dir_200bp = directory(ALIGNMENT_DIR / "200bp"),
         classification_100bp = ALIGNMENT_DIR / "all_samples_classification_100bp.json",
         classification_200bp = ALIGNMENT_DIR / "all_samples_classification_200bp.json"
     params:
@@ -324,8 +322,8 @@ checkpoint classify_all_samples_orthologs:
         group2_str = ",".join(GROUP2_SAMPLES)
     shell:
         """
-        mkdir -p {output.alignment_dir_100bp}
-        mkdir -p {output.alignment_dir_200bp}
+        mkdir -p {params.alignment_dir}/100bp
+        mkdir -p {params.alignment_dir}/200bp
 
         python {PROJECT_ROOT}/scripts/evolution/classify_all_samples_orthologs.py \
             {input.gt_matrix} {params.consensus_dir} {params.alignment_dir} \
@@ -394,16 +392,46 @@ rule calculate_all_samples_diversity:
         """
 
 
+rule calculate_shared_introner_body_dxy:
+    """
+    Calculate introner-body Dxy for fixed shared loci using active all-samples
+    classification classes.
+    """
+    input:
+        classification = _EVO_ALIGNMENT_DIR / "all_samples_classification_{flank_length}bp.json",
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+    output:
+        body_dxy = _EVO_DIVERSITY_DIR / "shared_introner_body_dxy_{flank_length}bp.tsv"
+    params:
+        assemblies_dir = ASSEMBLIES_DIR,
+        diversity_dir = _EVO_DIVERSITY_DIR,
+        alignment_dir = _EVO_ALIGNMENT_DIR / "introner_body",
+        group1 = ' '.join(GROUP1_SAMPLES),
+        group2 = ' '.join(GROUP2_SAMPLES)
+    shell:
+        """
+        mkdir -p {params.alignment_dir} {params.diversity_dir}
+        python {PROJECT_ROOT}/scripts/evolution/calculate_shared_introner_body_dxy.py \
+            --genotype-matrix {input.genotype_matrix} \
+            --classification {input.classification} \
+            --assemblies-dir {params.assemblies_dir} \
+            --alignment-dir {params.alignment_dir} \
+            --output {output.body_dxy} \
+            --group1-samples {params.group1} \
+            --group2-samples {params.group2}
+        """
+
+
 rule plot_all_samples_analysis:
     """
     Generate Dxy boxplot panels for all-samples diversity analysis.
 
-    Panel A: Flanking Dxy across fixation categories (including shared/fixed)
-    Panel B: Introner body Dxy for shared loci (split by family concordance)
+    Panel A: Flanking Dxy across fixation categories and shared-origin classes
+    Panel B: Introner body Dxy for shared-origin classes
     """
     input:
         metrics = DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
-        shared_dxy = EVOLUTION_DIR / "shared_introner_divergence" / "metrics" / "introner_vs_flank_dxy_all_shared.tsv"
+        body_dxy = _EVO_DIVERSITY_DIR / "shared_introner_body_dxy_{flank_length}bp.tsv"
     output:
         box_plot = EVOLUTION_PLOTS_DIR / "all_samples_box_plots_{flank_length}bp.png"
     shell:
@@ -411,7 +439,7 @@ rule plot_all_samples_analysis:
         mkdir -p {EVOLUTION_PLOTS_DIR}
         python {PROJECT_ROOT}/scripts/evolution/plot_all_samples_analysis_boxplot.py \
             --input {input.metrics} \
-            --shared-dxy {input.shared_dxy} \
+            --body-dxy {input.body_dxy} \
             --output {output.box_plot} \
             --flank_length {wildcards.flank_length}
         """
@@ -435,8 +463,6 @@ checkpoint classify_group1_orthologs:
         ),
         gt_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
-        alignment_dir_100bp = directory(ALIGNMENT_DIR / "group1_100bp"),
-        alignment_dir_200bp = directory(ALIGNMENT_DIR / "group1_200bp"),
         classification_100bp = ALIGNMENT_DIR / "group1_classification_100bp.json",
         classification_200bp = ALIGNMENT_DIR / "group1_classification_200bp.json"
     params:
@@ -445,8 +471,8 @@ checkpoint classify_group1_orthologs:
         group1_str = ",".join(GROUP1_SAMPLES)
     shell:
         """
-        mkdir -p {output.alignment_dir_100bp}
-        mkdir -p {output.alignment_dir_200bp}
+        mkdir -p {params.alignment_dir}/100bp
+        mkdir -p {params.alignment_dir}/200bp
 
         python {PROJECT_ROOT}/scripts/evolution/classify_group1_orthologs.py \
             {input.gt_matrix} {params.consensus_dir} {params.alignment_dir} \

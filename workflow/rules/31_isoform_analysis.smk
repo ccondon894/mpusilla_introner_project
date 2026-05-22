@@ -137,6 +137,29 @@ rule create_introner_loci_bed:
         bed.to_csv(output.bed, sep='\t', header=False, index=False)
 
 
+rule create_strain_introner_loci_bed:
+    """
+    Extract strain-specific introner loci from the genotype matrix.
+
+    These BEDs are used for per-strain NMD analysis so each SQANTI3
+    transcript set is compared against introners in its own genome frame.
+    """
+    input:
+        matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+    output:
+        bed = GENOTYPING_DIR / "introner_loci" / "{sample}.introner_loci.bed"
+    run:
+        import pandas as pd
+        df = pd.read_csv(input.matrix, sep='\t')
+        ref = df[(df['sample'] == wildcards.sample) & (df['presence'] == 1)].copy()
+        bed = ref[['contig', 'start', 'end', 'gene', 'ortholog_id', 'family']].copy()
+        bed = bed.dropna(subset=['contig', 'start', 'end'])
+        bed['start'] = bed['start'].astype(int)
+        bed['end'] = bed['end'].astype(int)
+        bed['family'] = bed['family'].fillna(-1).astype(int)
+        bed.to_csv(output.bed, sep='\t', header=False, index=False)
+
+
 # ============================================================
 # NMD (NONSENSE-MEDIATED DECAY) ANALYSIS
 # ============================================================
@@ -145,15 +168,24 @@ rule analyze_nmd_predictions:
     """
     Analyze NMD predictions from SQANTI3 classification.
 
-    Correlates NMD status with introner presence to test whether
-    introner loss allows more NMD-targeted isoforms to survive.
+    Correlates NMD status with introner presence using the original
+    per-strain analysis structure: each strain's SQANTI3 file is analyzed
+    against its own GTF and strain-specific introner BED, with mating-type
+    region genes filtered before multi-exon filtering.
 
     Uses Fisher's exact test for statistical significance.
     """
     input:
-        sqanti_data = SQANTI_DIR / "parsed_sqanti3_data.tsv",
-        gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
-        introner_bed = GENOTYPING_DIR / "introner_loci.bed"
+        sqanti_ccmp1545 = PROJECT_ROOT / "data" / "sqanti3_output_834" / "834_isoforms_classification.filtered.txt",
+        sqanti_rcc1614 = PROJECT_ROOT / "data" / "sqanti3_output_1614" / "1614_isoforms_classification.filtered.txt",
+        sqanti_rcc1749 = PROJECT_ROOT / "data" / "sqanti3_output_1749" / "1749_isoforms_classification.filtered.txt",
+        gtf_ccmp1545 = ANNOTATIONS_DIR / "CCMP1545.gtf",
+        gtf_rcc1614 = ANNOTATIONS_DIR / "RCC1614.gtf",
+        gtf_rcc1749 = ANNOTATIONS_DIR / "RCC1749.gtf",
+        bed_ccmp1545 = GENOTYPING_DIR / "introner_loci" / "CCMP1545.introner_loci.bed",
+        bed_rcc1614 = GENOTYPING_DIR / "introner_loci" / "RCC1614.introner_loci.bed",
+        bed_rcc1749 = GENOTYPING_DIR / "introner_loci" / "RCC1749.introner_loci.bed",
+        script = PROJECT_ROOT / "scripts" / "expression" / "analyze_nmd_predictions.py"
     output:
         analysis = NMD_DIR / "nmd_introner_analysis.txt",
         contingency = NMD_DIR / "nmd_contingency_tables.csv",
@@ -169,10 +201,18 @@ rule analyze_nmd_predictions:
         """
         mkdir -p {NMD_DIR}
 
-        python {PROJECT_ROOT}/scripts/expression/analyze_nmd_predictions.py \
-            --sqanti {input.sqanti_data} \
-            --gtf {input.gtf} \
-            --introner_bed {input.introner_bed} \
+        python {input.script} \
+            --mode by_strain \
+            --sqanti_ccmp1545 {input.sqanti_ccmp1545} \
+            --sqanti_rcc1614 {input.sqanti_rcc1614} \
+            --sqanti_rcc1749 {input.sqanti_rcc1749} \
+            --gtf_ccmp1545 {input.gtf_ccmp1545} \
+            --gtf_rcc1614 {input.gtf_rcc1614} \
+            --gtf_rcc1749 {input.gtf_rcc1749} \
+            --bed_ccmp1545 {input.bed_ccmp1545} \
+            --bed_rcc1614 {input.bed_rcc1614} \
+            --bed_rcc1749 {input.bed_rcc1749} \
+            --mt_gtf {input.gtf_ccmp1545} \
             --output {output.analysis} \
             --contingency {output.contingency} \
             --plot {output.plot} \
@@ -185,13 +225,20 @@ rule nmd_by_strain:
     """
     Analyze NMD predictions stratified by strain.
 
-    Compares NMD patterns across CCMP1545, RCC1614, and RCC1749.
+    Compares NMD patterns across CCMP1545, RCC1614, and RCC1749 using
+    strain-specific SQANTI3 files, GTFs, and introner BEDs.
     """
     input:
-        sqanti_data = SQANTI_DIR / "parsed_sqanti3_data.tsv",
+        sqanti_ccmp1545 = PROJECT_ROOT / "data" / "sqanti3_output_834" / "834_isoforms_classification.filtered.txt",
+        sqanti_rcc1614 = PROJECT_ROOT / "data" / "sqanti3_output_1614" / "1614_isoforms_classification.filtered.txt",
+        sqanti_rcc1749 = PROJECT_ROOT / "data" / "sqanti3_output_1749" / "1749_isoforms_classification.filtered.txt",
         gtf_ccmp1545 = ANNOTATIONS_DIR / "CCMP1545.gtf",
         gtf_rcc1614 = ANNOTATIONS_DIR / "RCC1614.gtf",
-        gtf_rcc1749 = get_gtf("RCC1749")
+        gtf_rcc1749 = ANNOTATIONS_DIR / "RCC1749.gtf",
+        bed_ccmp1545 = GENOTYPING_DIR / "introner_loci" / "CCMP1545.introner_loci.bed",
+        bed_rcc1614 = GENOTYPING_DIR / "introner_loci" / "RCC1614.introner_loci.bed",
+        bed_rcc1749 = GENOTYPING_DIR / "introner_loci" / "RCC1749.introner_loci.bed",
+        script = PROJECT_ROOT / "scripts" / "expression" / "analyze_nmd_predictions.py"
     output:
         analysis = NMD_DIR / "nmd_by_strain_analysis.txt",
         plot = FIGURES_DIR / "nmd_by_strain.pdf",
@@ -201,12 +248,18 @@ rule nmd_by_strain:
     conda: "../envs/isoform_analysis.yaml"
     shell:
         """
-        python {PROJECT_ROOT}/scripts/expression/analyze_nmd_predictions.py \
+        python {input.script} \
             --mode by_strain \
-            --sqanti {input.sqanti_data} \
+            --sqanti_ccmp1545 {input.sqanti_ccmp1545} \
+            --sqanti_rcc1614 {input.sqanti_rcc1614} \
+            --sqanti_rcc1749 {input.sqanti_rcc1749} \
             --gtf_ccmp1545 {input.gtf_ccmp1545} \
             --gtf_rcc1614 {input.gtf_rcc1614} \
             --gtf_rcc1749 {input.gtf_rcc1749} \
+            --bed_ccmp1545 {input.bed_ccmp1545} \
+            --bed_rcc1614 {input.bed_rcc1614} \
+            --bed_rcc1749 {input.bed_rcc1749} \
+            --mt_gtf {input.gtf_ccmp1545} \
             --output {output.analysis} \
             --plot {output.plot} \
             2> {log}
@@ -292,6 +345,34 @@ rule prepare_isoform_data:
         """
 
 
+rule plot_introner_isoform_raincloud:
+    """
+    Plot isoform count and expression distributions grouped by introner count.
+
+    Ports the older raincloud-style isoform/introner visualization into the
+    current workflow using the filtered isoform-introner data table.
+    """
+    input:
+        data = ISOFORM_DIR / "isoform_introner_data_filtered.csv",
+        script = PROJECT_ROOT / "scripts" / "expression" / "isoform_analysis" / "plot_introner_isoform_raincloud.py"
+    output:
+        pdf = FIGURES_DIR / "introner_isoform_expression_raincloud.pdf",
+        png = FIGURES_DIR / "introner_isoform_expression_raincloud.png",
+        report = ISOFORM_DIR / "introner_isoform_expression_raincloud_stats.txt"
+    log:
+        EXPRESSION_LOG_DIR / "introner_isoform_raincloud.log"
+    conda: "../envs/isoform_analysis.yaml"
+    shell:
+        """
+        python {input.script} \
+            --input {input.data} \
+            --output-pdf {output.pdf} \
+            --output-png {output.png} \
+            --report {output.report} \
+            2> {log}
+        """
+
+
 # ============================================================
 # TARGET RULES
 # ============================================================
@@ -305,8 +386,10 @@ rule isoform_analysis_complete:
         DIVERSITY_DIR / "diversity_by_introner_status.csv",
         NMD_DIR / "nmd_introner_analysis.txt",
         ISOFORM_DIR / "isoform_introner_data_filtered.csv",
+        ISOFORM_DIR / "introner_isoform_expression_raincloud_stats.txt",
         FIGURES_DIR / "shannon_diversity_distribution.pdf",
-        FIGURES_DIR / "nmd_introner_association.pdf"
+        FIGURES_DIR / "nmd_introner_association.pdf",
+        FIGURES_DIR / "introner_isoform_expression_raincloud.pdf"
 
 
 rule shannon_diversity_only:

@@ -224,6 +224,10 @@ params:
     eggnog_go_evidence: "non-electronic"
     eggnog_tax_scope: "auto"
     api_max_retries: 3           # Retry transient API failures
+    permutation_n: 1000000       # CDS-length-weighted GO permutations
+    permutation_threads: 16      # Parallel workers for GO permutations
+    permutation_batch_size: 1000 # Permutations per worker task
+    permutation_seed: 20260521
 
 # ============================================================
 # PLOT CONFIGURATION

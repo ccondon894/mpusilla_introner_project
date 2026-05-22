@@ -25,7 +25,7 @@ MISSING = 3
 
 ANCESTRAL_STATUS = {"ancestral", "likely_ancestral", "ancestral_low_identity"}
 INDEPENDENT_STATUS = {"independent", "likely_independent"}
-INTRONER_GROUPS = [
+BASE_INTRONER_GROUPS = [
     "all_introners",
     "ancestral",
     "independent_insertion",
@@ -33,6 +33,7 @@ INTRONER_GROUPS = [
     "consistent_group1",
     "consistent_group2",
 ]
+INTRONER_GROUPS = BASE_INTRONER_GROUPS
 
 
 def clean_gene_id(gene_id):
@@ -54,6 +55,18 @@ def parse_presence(value):
     if presence in {PRESENT, ABSENT, MISSING}:
         return presence
     return None
+
+
+def parse_family(value):
+    if pd.isna(value):
+        return None
+    try:
+        family = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if family < 0:
+        return None
+    return family
 
 
 def clean_go_id(go_id):
@@ -172,6 +185,21 @@ def validate_samples(df, group1_samples, group2_samples):
         raise ValueError("Samples cannot be in both groups: " + ", ".join(sorted(overlap)))
 
 
+def family_group_label(family):
+    return f"family_{family}"
+
+
+def ordered_group_names(gene_set_df=None):
+    family_groups = []
+    if gene_set_df is not None and not gene_set_df.empty:
+        observed = set(gene_set_df["introner_group"].dropna().astype(str))
+        family_groups = sorted(
+            (group for group in observed if group.startswith("family_")),
+            key=lambda group: int(group.split("_", 1)[1]),
+        )
+    return BASE_INTRONER_GROUPS + family_groups
+
+
 def classify_loci(genotype_file, group1_samples, group2_samples, excluded_within_status):
     df = pd.read_csv(genotype_file, sep="\t")
     required = {
@@ -189,6 +217,7 @@ def classify_loci(genotype_file, group1_samples, group2_samples, excluded_within
 
     locus_rows = []
     group_to_genes = defaultdict(lambda: defaultdict(set))
+    has_family = "family" in df.columns
 
     for ortholog_id, locus in df.groupby("ortholog_id", sort=False):
         genes = sorted(
@@ -235,6 +264,24 @@ def classify_loci(genotype_file, group1_samples, group2_samples, excluded_within
         if use_locus and group2_consistent_present:
             labels.append("consistent_group2")
 
+        label_to_genes = {label: set(genes) for label in labels}
+        if use_locus and has_family:
+            present_rows = locus.loc[locus["presence"].map(parse_presence) == PRESENT]
+            for family, family_rows in present_rows.groupby(
+                present_rows["family"].map(parse_family), dropna=True
+            ):
+                if family is None:
+                    continue
+                family_label = family_group_label(int(family))
+                family_genes = {
+                    gene for gene in family_rows["gene"].map(clean_gene_id) if gene
+                }
+                if not family_genes:
+                    family_genes = set(genes)
+                if family_genes:
+                    labels.append(family_label)
+                    label_to_genes[family_label] = family_genes
+
         locus_rows.append({
             "ortholog_id": ortholog_id,
             "gene_ids": ";".join(genes),
@@ -255,12 +302,19 @@ def classify_loci(genotype_file, group1_samples, group2_samples, excluded_within
         })
 
         for label in labels:
-            for gene in genes:
+            for gene in label_to_genes.get(label, genes):
                 group_to_genes[label][gene].add(ortholog_id)
 
     gene_set_rows = []
-    for label in INTRONER_GROUPS:
-        for gene, orthologs in sorted(group_to_genes[label].items()):
+    for label in ordered_group_names(pd.DataFrame(
+        {"introner_group": list(group_to_genes.keys())}
+    )):
+        for gene, orthologs in sorted(
+            group_to_genes[label].items(),
+            key=lambda item: str(item[0]),
+        ):
+            if gene is None or pd.isna(gene):
+                continue
             gene_set_rows.append({
                 "introner_group": label,
                 "gene_id": gene,
@@ -296,7 +350,7 @@ def run_enrichment(gene_set_df, background_genes, gene2go, terms, min_genes, fdr
     }
 
     rows = []
-    for group_name in INTRONER_GROUPS:
+    for group_name in ordered_group_names(gene_set_df):
         if gene_set_df.empty:
             study_genes = set()
         else:
@@ -380,7 +434,7 @@ def write_summary(path, genotype_file, go_jsons, group1_samples, group2_samples,
         handle.write(f"Ortholog groups classified: {len(locus_df)}\n")
         handle.write(f"Background genes with GO terms: {len(background_genes)}\n\n")
 
-        for group_name in INTRONER_GROUPS:
+        for group_name in ordered_group_names(gene_set_df):
             loci = locus_df["introner_groups"].fillna("").str.contains(group_name, regex=False).sum()
             if gene_set_df.empty:
                 group_genes = set()
