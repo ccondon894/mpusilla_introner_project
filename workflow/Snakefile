@@ -290,7 +290,7 @@ if LOAD_SNP:
         - SNP calling with GATK
         - VCF filtering and 4-fold degenerate site extraction
         - Phylogenetic analysis with IQ-TREE
-        - Demographic modeling with dadi
+        - Demographic modeling with moments
         - Selection and population structure analysis
         """
         input:
@@ -303,7 +303,7 @@ if LOAD_SNP:
             SNP_DIR / "phylogenetics" / "mpusilla.snps.4d.min4.phy.treefile",
             FIGURES_DIR / "phylogenetic_tree.pdf",
             # Demography
-            SNP_DIR / "demography" / "mpusilla.4d.dadi.fs",
+            SNP_DIR / "demography" / "observed.2d.fs",
             FIGURES_DIR / "2D_afs.pdf",
             # Selection analysis
             SNP_DIR / "selection" / "tajimas_d.tsv",

@@ -9,6 +9,8 @@ dependencies:
   - scipy
   - pandas
   - matplotlib
+  - demes
+  - demesdraw
   - pip
   - pip:
       - moments-popgen

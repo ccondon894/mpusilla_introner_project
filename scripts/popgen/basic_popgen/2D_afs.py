@@ -10,7 +10,8 @@ def parse_args():
     parser.add_argument('--vcf', type=str, required=True, help="Path to the VCF file")
     parser.add_argument('--group1', type=str, required=True, help="Comma-separated Group1 sample names")
     parser.add_argument('--group2', type=str, required=True, help="Comma-separated Group2 sample names (used as pop1)")
-    parser.add_argument('--output', type=str, required=True, help="Output plot path (extension determines format)")
+    parser.add_argument('--output_png', type=str, required=True, help="Output plot path (extension determines format)")
+    parser.add_argument('--output_pdf', type=str, required=True, help="Output plot path (extension determines format)")    
     return parser.parse_args()
 
 def compute_folded_allele_frequency_spectrum(vcf_file, pop1_samples, obsolete_samples):
@@ -77,7 +78,7 @@ def print_spectrum(spectrum):
         row_str = f"Minor Allele Count {pop1_count}: {row}"
         print(row_str)
 
-def plot_2d_afs_heatmap(spectrum, output_file):
+def plot_2d_afs_heatmap(spectrum, output_pdf, output_png):
     # Log scale the counts, setting zeros to a small positive value to avoid log(0)
     log_spectrum = np.log10(spectrum + 1)  # Adding 1 to avoid log(0)
 
@@ -88,20 +89,22 @@ def plot_2d_afs_heatmap(spectrum, output_file):
                      linewidths=0.5, linecolor='white')
 
     # Add clean labels (no title for publication-quality)
-    plt.xlabel("Group 1 Introner Allele Frequency", fontsize=12)
-    plt.ylabel("Group 2 Introner Allele Frequency", fontsize=12)
+    plt.xlabel("Population 1 4D Site Frequency", fontsize=13)
+    plt.ylabel("Population 2 4D Site Frequency", fontsize=13)
     # plt.title("Folded 2D Allele Frequency Spectrum")
 
     # Rotate x-axis labels 45 degrees for better readability
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right', fontsize=12)
+    ax.set_yticklabels(ax.get_yticklabels(), fontsize=12)
     # Set y-axis to show values correctly (inverted to match typical AFS orientation)
     plt.gca().invert_yaxis()
 
     plt.tight_layout()
 
     # Save the plot with high DPI
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    plt.savefig(output_pdf, dpi=300, bbox_inches='tight')
+    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+
 
 def main():
     args = parse_args()
@@ -110,7 +113,7 @@ def main():
     spectrum = compute_folded_allele_frequency_spectrum(args.vcf, pop1_samples, obsolete_samples)
 
     print_spectrum(spectrum)
-    plot_2d_afs_heatmap(spectrum, args.output)
+    plot_2d_afs_heatmap(spectrum, args.output_pdf, args.output_png)
 
 if __name__ == "__main__":
     main()
