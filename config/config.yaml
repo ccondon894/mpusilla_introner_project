@@ -108,6 +108,51 @@ paths:
   fourfold_vcf: "/scratch1/chris/introner-genotyping-pipeline/popgen_snp_data/mpusilla.snps.4d.notMT.group1.allsites.vcf.gz"
 
 # ============================================================
+# MICRO-C DATASETS
+# ============================================================
+
+microc:
+  # Start with the smaller pilot run. Switch to "cc15353" once the
+  # pilot workflow is validated end-to-end.
+  active_dataset: "pilot"
+
+  samples:
+    - CCMP1545
+    - RCC1614
+    - RCC1749
+
+  datasets:
+    pilot:
+      fastq_dir: "/storage1/chris/introner-micro-c/251205_algaemicroc"
+      read_pattern: "{fastq_id}_S*_{read}_001.fastq.gz"
+      sample_fastq_ids:
+        CCMP1545: "834"
+        RCC1614: "1614"
+        RCC1749: "1749"
+
+    cc15353:
+      fastq_dir: "/storage1/chris/introner-micro-c/CC15353"
+      read_pattern: "{fastq_id}_S*_{read}_001.fastq.gz"
+      sample_fastq_ids:
+        # CCMP1545 is labeled RCC834 in the CC15353 demultiplexed FASTQs.
+        CCMP1545: "RCC834"
+        RCC1614: "RCC1614"
+        RCC1749: "RCC1749"
+
+  alignment:
+    bwa_opts: "-5SP"
+    mapq: 40
+    walks_policy: "5unique"
+    max_inter_align_gap: 30
+    threads: 24
+    samtools_view_threads: 4
+
+  matrix:
+    base_resolution: 200
+    resolutions: [200, 400, 1000, 2000, 5000, 10000, 25000, 50000]
+    threads: 8
+
+# ============================================================
 # OUTPUT PATHS (relative to project root)
 # ============================================================
 
@@ -129,6 +174,7 @@ output:
   expression: "results/expression"
   go_enrichment: "results/go_enrichment"
   figures: "results/figures"
+  microc: "results/microc"
 
 # ============================================================
 # TOOL PARAMETERS

@@ -186,18 +186,57 @@ rule generate_ribbons:
         """
 
 # ============================================================================
+# CIRCOS HISTOGRAM RULES
+# ============================================================================
+
+# Non-introner intron matrix is produced by rules/13_non_introner_introns.smk.
+NON_INTRONER_INTRONS_DIR_FOR_CIRCOS = EVOLUTION_DIR / "non_introner_introns"
+
+rule generate_circos_histograms:
+    """Generate Circos histogram tracks from current genotype matrices."""
+    input:
+        karyotype = CIRCOS_DIR / f"{G1}_vs_{G2}_reordered_flipped_filtered.kar",
+        introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        non_introner_matrix = NON_INTRONER_INTRONS_DIR_FOR_CIRCOS / "intron_genotype_matrix.tsv",
+        g1_gtf = get_gtf(G1),
+        g2_gtf = get_gtf(G2)
+    output:
+        g1_introns = CIRCOS_DIR / f"{G1}.intron_histogram.txt",
+        g2_introns = CIRCOS_DIR / f"{G2}.intron_histogram.txt",
+        g1_introners = CIRCOS_DIR / f"{G1}.introner_histogram.txt",
+        g2_introners = CIRCOS_DIR / f"{G2}.introner_histogram.txt"
+    params:
+        bin_size = CIRCOS_PARAMS.get("histogram_bin_size", 50000),
+        output_dir = CIRCOS_DIR
+    shell:
+        """
+        python3 {GA_SCRIPTS}/generate_circos_histograms.py \
+            --introner-matrix {input.introner_matrix} \
+            --non-introner-matrix {input.non_introner_matrix} \
+            --karyotype {input.karyotype} \
+            --strain1-name {G1} \
+            --strain2-name {G2} \
+            --non-introner-reference {REFERENCE} \
+            --strain1-gtf {input.g1_gtf} \
+            --strain2-gtf {input.g2_gtf} \
+            --bin-size {params.bin_size} \
+            --output-dir {params.output_dir}
+        """
+
+# ============================================================================
 # CIRCOS RENDERING RULES
 # ============================================================================
 
-# Static circos config and histogram data files live in data/circos/
+# Static circos config lives in data/circos/.
 CIRCOS_DATA_DIR = PROJECT_ROOT / "data" / "circos"
 
 rule render_circos:
-    """Render final circos synteny plot using static circos.conf."""
+    """Render final circos synteny plot using generated data tracks."""
     input:
         karyotype = CIRCOS_DIR / f"{G1}_vs_{G2}_reordered_flipped_filtered.kar",
         ribbons = CIRCOS_DIR / f"{G1}_vs_{G2}_ribbons_with_merging.tsv",
-        conf = CIRCOS_DATA_DIR / "circos.conf"
+        conf = CIRCOS_DATA_DIR / "circos.conf",
+        histograms = rules.generate_circos_histograms.output
     output:
         png = CIRCOS_DIR / "circos.png",
         svg = CIRCOS_DIR / "circos.svg"
@@ -206,6 +245,6 @@ rule render_circos:
         data_dir = CIRCOS_DATA_DIR
     shell:
         """
-        cp {params.data_dir}/circos.conf {params.data_dir}/*.txt {CIRCOS_DIR}/ && \
+        cp {params.data_dir}/circos.conf {CIRCOS_DIR}/ && \
         cd {CIRCOS_DIR} && conda run -n {params.circos_env} circos -conf circos.conf
         """
