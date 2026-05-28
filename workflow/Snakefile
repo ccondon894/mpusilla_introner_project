@@ -39,6 +39,7 @@ GO_DIR = RESULTS / "go_enrichment"
 FIGURES_DIR = RESULTS / "figures"
 GENOME_ALIGNMENT_DIR = RESULTS / "genome_alignment"
 ALIGNMENT_DIR = EVOLUTION_DIR / "alignments"
+MICROC_DIR = PROJECT_ROOT / config["output"].get("microc", "results/microc")
 
 # Samples with augmented GTFs from StringTie de novo annotation.
 # For these samples, downstream rules use the augmented+renamed GTF
@@ -84,6 +85,7 @@ wildcard_constraints:
 #   evolution   - Evolution analysis (rules 10-12)
 #   snp         - SNP population genetics (rules 20-24)
 #   expression  - Expression & GO analysis (rules 30-32, 40)
+#   microc      - Micro-C read processing and contact matrix generation
 #   all         - Load all modules (default)
 #
 # Examples:
@@ -104,6 +106,7 @@ LOAD_GENOTYPING = LOAD_ALL or "genotyping" in MODULES
 LOAD_EVOLUTION = LOAD_ALL or "evolution" in MODULES
 LOAD_SNP = LOAD_ALL or "snp" in MODULES
 LOAD_EXPRESSION = LOAD_ALL or "expression" in MODULES
+LOAD_MICROC = LOAD_ALL or "microc" in MODULES
 
 # ============================================================
 # INCLUDE RULE FILES (conditional based on module selection)
@@ -116,6 +119,10 @@ if LOAD_GENOTYPING or LOAD_EVOLUTION or LOAD_SNP or LOAD_EXPRESSION:
     include: "rules/04_blast_genotyping.smk"
     include: "rules/05_ortholog_detection.smk"
     include: "rules/06_coverage_calling.smk"
+
+# Micro-C only needs the shared assembly prep/index rules.
+if LOAD_MICROC and not (LOAD_GENOTYPING or LOAD_EVOLUTION or LOAD_SNP or LOAD_EXPRESSION):
+    include: "rules/00_data_prep.smk"
 
 # Evolution analysis (Iteration 2)
 if LOAD_EVOLUTION:
@@ -141,6 +148,10 @@ if LOAD_EXPRESSION:
     include: "rules/32_glm_modeling.smk"
     # GO enrichment (Iteration 4)
     include: "rules/40_go_enrichment.smk"
+
+# Micro-C processing and contact matrix generation
+if LOAD_MICROC:
+    include: "rules/50_microc.smk"
 
 # ============================================================
 # TARGET RULES
