@@ -33,12 +33,22 @@ PCA_DIR = SELECTION_DIR / "pca"
 LD_DIR = SELECTION_DIR / "ld"
 SFS_DIR = SELECTION_DIR / "sfs"
 RECOMB_DIR = SELECTION_DIR / "recombination"
+SWEEP_DIR = SELECTION_DIR / "sweeps"
 SELECTION_LOG_DIR = SNP_DIR / "logs" / "selection"
 SNPEFF_DIR = SNP_DIR / "snpeff"
 
 # Pyrho recombination map paths
 PYRHO_CCMP1545 = config["paths"]["pyrho"]["ccmp1545"]
 PYRHO_RCC1749 = config["paths"]["pyrho"]["rcc1749"]
+
+# Group 1 polymorphic introner sweep screen parameters
+SWEEP_CONFIG = config["params"].get("selection_sweeps", {})
+SWEEP_WINDOW_SIZES = SWEEP_CONFIG.get("window_sizes", [10000, 25000, 50000])
+SWEEP_MIN_CALLABLE_SITES = SWEEP_CONFIG.get("min_callable_sites", 20)
+SWEEP_BACKGROUNDS_PER_FOCAL = SWEEP_CONFIG.get("background_windows_per_focal", 50)
+SWEEP_ACCEPTED_WITHIN_STATUSES = SWEEP_CONFIG.get(
+    "accepted_within_statuses", ["consistent", "singleton"]
+)
 
 
 # ============================================================
@@ -105,6 +115,96 @@ rule plot_sfs_by_class:
             --output_png {output.png} \
             2> {log}
         """
+
+
+# ============================================================
+# GROUP 1 POLYMORPHIC INTRONER SWEEP SCREEN
+# ============================================================
+
+rule build_group1_introner_sweep_targets:
+    """
+    Build CCMP1545-anchored Group 1-only polymorphic introner targets.
+
+    Retains complete Group 1 polymorphisms with accepted within-group orthology,
+    no Group 2 presence calls, and no overlap with the CCMP1545 mating-type
+    region.
+    """
+    input:
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+    output:
+        tsv = SWEEP_DIR / "group1_polymorphic_introner_targets.tsv",
+        bed = SWEEP_DIR / "group1_polymorphic_introner_targets.bed"
+    params:
+        group1 = ",".join(GROUP1_SAMPLES),
+        group2 = ",".join(GROUP2_SAMPLES),
+        reference_sample = REFERENCE,
+        accepted_statuses = ",".join(SWEEP_ACCEPTED_WITHIN_STATUSES),
+        mating_contig = lambda wildcards: f"{REFERENCE}#0#{config['mating_type_region']['scaffold']}",
+        mating_start = config["mating_type_region"]["start"],
+        mating_end = config["mating_type_region"]["end"]
+    log:
+        SELECTION_LOG_DIR / "build_group1_introner_sweep_targets.log"
+    conda: "../envs/popgen.yaml"
+    shell:
+        """
+        mkdir -p {SWEEP_DIR} {SELECTION_LOG_DIR}
+
+        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/build_group1_introner_sweep_targets.py \
+            --genotype-matrix {input.genotype_matrix} \
+            --output-tsv {output.tsv} \
+            --output-bed {output.bed} \
+            --group1-samples {params.group1} \
+            --group2-samples {params.group2} \
+            --reference-sample {params.reference_sample} \
+            --accepted-within-statuses {params.accepted_statuses} \
+            --mating-contig {params.mating_contig} \
+            --mating-start {params.mating_start} \
+            --mating-end {params.mating_end} \
+            > {log} 2>&1
+        """
+
+
+rule calculate_group1_introner_sweep_windows:
+    """
+    Compare sweep statistics around Group 1 polymorphic introners to matched
+    non-focal background windows in the Group 1 4D all-sites VCF.
+    """
+    input:
+        vcf = config["paths"]["fourfold_vcf"],
+        targets = SWEEP_DIR / "group1_polymorphic_introner_targets.tsv"
+    output:
+        introner_windows = SWEEP_DIR / "introner_windows.tsv",
+        background_windows = SWEEP_DIR / "background_windows.tsv",
+        pvalues = SWEEP_DIR / "introner_sweep_empirical_pvalues.tsv",
+        plot_png = FIGURES_DIR / "snp_popgen" / "group1_introner_sweep_summary.png",
+        plot_pdf = FIGURES_DIR / "snp_popgen" / "group1_introner_sweep_summary.pdf"
+    params:
+        samples = ",".join(GROUP1_SAMPLES),
+        window_sizes = ",".join(map(str, SWEEP_WINDOW_SIZES)),
+        min_callable_sites = SWEEP_MIN_CALLABLE_SITES,
+        backgrounds_per_focal = SWEEP_BACKGROUNDS_PER_FOCAL
+    log:
+        SELECTION_LOG_DIR / "calculate_group1_introner_sweep_windows.log"
+    conda: "../envs/popgen.yaml"
+    shell:
+        """
+        mkdir -p {SWEEP_DIR} {FIGURES_DIR}/snp_popgen {SELECTION_LOG_DIR}
+
+        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/calculate_group1_introner_sweep_windows.py \
+            --vcf {input.vcf} \
+            --targets {input.targets} \
+            --samples {params.samples} \
+            --window-sizes {params.window_sizes} \
+            --min-callable-sites {params.min_callable_sites} \
+            --backgrounds-per-focal {params.backgrounds_per_focal} \
+            --introner-windows {output.introner_windows} \
+            --background-windows {output.background_windows} \
+            --pvalues {output.pvalues} \
+            --plot-png {output.plot_png} \
+            --plot-pdf {output.plot_pdf} \
+            > {log} 2>&1
+        """
+
 
 # ============================================================
 # PRINCIPAL COMPONENT ANALYSIS
@@ -572,3 +672,17 @@ rule recombination_only:
         RECOMB_DIR / "gene_exonic_frequency_based_5kb_updated_summary.tsv",
         RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_summary.tsv",
         FIGURES_DIR / "snp_popgen" / "recombination_boxplots.pdf"
+
+
+rule group1_introner_sweeps:
+    """
+    Target: Group 1 polymorphic introner selective sweep screen only.
+    """
+    input:
+        SWEEP_DIR / "group1_polymorphic_introner_targets.tsv",
+        SWEEP_DIR / "group1_polymorphic_introner_targets.bed",
+        SWEEP_DIR / "introner_windows.tsv",
+        SWEEP_DIR / "background_windows.tsv",
+        SWEEP_DIR / "introner_sweep_empirical_pvalues.tsv",
+        FIGURES_DIR / "snp_popgen" / "group1_introner_sweep_summary.png",
+        FIGURES_DIR / "snp_popgen" / "group1_introner_sweep_summary.pdf"
