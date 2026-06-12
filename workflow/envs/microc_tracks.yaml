@@ -1,0 +1,8 @@
+name: microc_tracks
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - samtools
+  - bedtools
+  - ucsc-bedgraphtobigwig
