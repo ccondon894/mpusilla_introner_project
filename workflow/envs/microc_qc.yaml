@@ -1,0 +1,13 @@
+name: microc_qc
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - cooler
+  - cooltools
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - seaborn

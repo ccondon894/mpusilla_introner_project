@@ -1,0 +1,11 @@
+name: non_introner_introns
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - numpy
+  - matplotlib
+  - pysam
+  - minimap2
+  - samtools

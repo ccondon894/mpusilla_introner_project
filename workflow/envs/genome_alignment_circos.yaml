@@ -1,0 +1,14 @@
+name: genome_alignment_circos
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - pandas
+  - matplotlib
+  - pycirclize
+  - mummer4
+  - circos
+  - perl-gd
+  - gnuplot
+  - imagemagick

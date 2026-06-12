@@ -707,6 +707,10 @@ def main():
     parser.add_argument("--gtf_overrides", default=None,
                         help="Comma-separated sample=path overrides for GTF lookup, "
                              "e.g. RCC1749=/path/to/RCC1749.augmented.renamed.gtf")
+    parser.add_argument("--include_mating_region", action="store_true",
+                        help="Keep non-introner introns in the CCMP1545 scaffold 2 mating-type region")
+    parser.add_argument("--keep_reference_singletons", action="store_true",
+                        help="Keep reference-only singleton loci instead of filtering them as likely artifacts")
     args = parser.parse_args()
 
     group1 = args.group1.split(",")
@@ -763,21 +767,24 @@ def main():
     print(f"  Removed {n_removed} introner-overlapping introns")
     print(f"  Retained {n_kept} non-introner introns")
 
-    # Filter out genes in the mating-type region
-    MATING_CHROM = "CCMP1545#0#scaffold_2"
-    MATING_START = 49808
-    MATING_END = 1730591
-    n_before = sum(len(v) for v in nonintroner_introns.values())
-    nonintroner_introns = {
-        gene_id: intron_list
-        for gene_id, intron_list in nonintroner_introns.items()
-        if not any(
-            contig == MATING_CHROM and istart <= MATING_END and iend >= MATING_START
-            for contig, istart, iend, _ in intron_list
-        )
-    }
-    n_after = sum(len(v) for v in nonintroner_introns.values())
-    print(f"  Removed {n_before - n_after} introns in mating-type region")
+    # Filter out genes in the mating-type region unless explicitly retained.
+    if args.include_mating_region:
+        print("  Keeping mating-type region introns")
+    else:
+        MATING_CHROM = "CCMP1545#0#scaffold_2"
+        MATING_START = 49808
+        MATING_END = 1730591
+        n_before = sum(len(v) for v in nonintroner_introns.values())
+        nonintroner_introns = {
+            gene_id: intron_list
+            for gene_id, intron_list in nonintroner_introns.items()
+            if not any(
+                contig == MATING_CHROM and istart <= MATING_END and iend >= MATING_START
+                for contig, istart, iend, _ in intron_list
+            )
+        }
+        n_after = sum(len(v) for v in nonintroner_introns.values())
+        print(f"  Removed {n_before - n_after} introns in mating-type region")
 
     # ── Stage 3b: Load coverage calls (if provided) ──
     coverage_calls = None
@@ -807,15 +814,18 @@ def main():
     # We check Group 1 only because the outgroup state shouldn't save a ref artifact.
     non_ref_g1 = [s for s in group1 if s != reference]
     n_ref_singletons = 0
-    filtered_matrix = []
-    for row in matrix:
-        if (row[reference] == PRESENT
-                and not any(row[s] == PRESENT for s in non_ref_g1)):
-            n_ref_singletons += 1
-        else:
-            filtered_matrix.append(row)
-    matrix = filtered_matrix
-    print(f"  Removed {n_ref_singletons} reference-only singletons (likely annotation artifacts)")
+    if args.keep_reference_singletons:
+        print("  Keeping reference-only singletons")
+    else:
+        filtered_matrix = []
+        for row in matrix:
+            if (row[reference] == PRESENT
+                    and not any(row[s] == PRESENT for s in non_ref_g1)):
+                n_ref_singletons += 1
+            else:
+                filtered_matrix.append(row)
+        matrix = filtered_matrix
+        print(f"  Removed {n_ref_singletons} reference-only singletons (likely annotation artifacts)")
     print(f"  Matrix rows: {len(matrix)}")
 
     folded_afs, folded_afs_minor_present, folded_afs_minor_absent, folded_n = compute_folded_afs(matrix, group1)
