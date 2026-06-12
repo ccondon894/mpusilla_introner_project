@@ -262,7 +262,9 @@ if LOAD_EVOLUTION:
             GENOME_ALIGNMENT_DIR / "mummer" / f"{REFERENCE}_vs_{config['samples']['reference']['group2']}.1delta",
             FIGURES_DIR / "genome_alignment" / f"{REFERENCE}_vs_{config['samples']['reference']['group2']}.png",
             GENOME_ALIGNMENT_DIR / "circos" / "circos.png",
-            GENOME_ALIGNMENT_DIR / "circos" / "circos.svg"
+            GENOME_ALIGNMENT_DIR / "circos" / "circos.svg",
+            GENOME_ALIGNMENT_DIR / "circos" / "circos.pycirclize.png",
+            GENOME_ALIGNMENT_DIR / "circos" / "circos.pycirclize.svg"
 
 
     rule genotyping_evolution_all:

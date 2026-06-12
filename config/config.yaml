@@ -152,6 +152,59 @@ microc:
     resolutions: [200, 400, 1000, 2000, 5000, 10000, 25000, 50000]
     threads: 8
 
+  qc:
+    # Visual matrix QC
+    heatmap_resolution: 5000
+    detail_resolution: 1000
+    detail_max_chroms: 12
+    detail_min_chrom_size: 100000
+
+    # Distance-decay / P(s) QC
+    decay_resolution: 1000
+    decay_max_distance: 2000000
+    decay_log_bins: 80
+
+    # Insulation/domain QC
+    insulation_resolution: 1000
+    insulation_window: 25000
+    insulation_ignore_diags: 2
+    insulation_min_boundary_strength: 0.0
+    insulation_boundary_threshold_method: li
+    insulation_max_plot_chroms: 12
+    insulation_min_plot_chrom_size: 100000
+    introner_boundary_flank: 5000
+    introner_boundary_permutations: 1000
+    introner_insulation_permutations: 10000
+    introner_boundary_random_seed: 1545
+    introner_domain_position_min_chrom_size: 100000
+    introner_boundary_excluded_chroms:
+      CCMP1545:
+        - "CCMP1545#0#scaffold_2"
+    chromosome_track_samples:
+      - CCMP1545
+      - RCC1614
+    chromosome_track_chroms: [1, 3, 4, 5]
+    chromosome_track_max_distance: 250000
+    chromosome_track_introner_bin_bp: 25000
+
+  tracks:
+    # Browser-ready nucleosome-scale Micro-C signal tracks.
+    # Tracks are CPM-normalized after the same MAPQ/flag filter.
+    mapq: 40
+    exclude_flags: 3844  # unmapped + secondary + QC fail + duplicate + supplementary
+    threads: 8
+
+  introner_profiles:
+    # Aggregate anchor signal around genotype-matrix introner boundaries.
+    samples:
+      - CCMP1545
+      - RCC1614
+      - RCC1749
+    window_bp: 1000
+    bin_bp: 10
+    absent_max_length: 200
+    normal_intron_exclusion_window_bp: 1000
+
 # ============================================================
 # OUTPUT PATHS (relative to project root)
 # ============================================================
@@ -239,7 +292,6 @@ params:
 
   # Circos visualization parameters
   circos:
-    conda_env: "circos_env"      # Pre-existing conda env with circos + perl-gd
     gap_threshold: 50000         # Gap threshold for ribbon merging (bp)
     merge_threshold: 750         # Merge threshold for adjacent ribbons (bp)
     remove_contigs: "2,1,33,30,32,40,43,24,42"  # Small/uninformative contigs to exclude
@@ -247,6 +299,16 @@ params:
     insert_after: 25             # Insert moved contig after this one
     insert_before: 12            # Insert moved contig before this one
     move_contig_color: "hue080"  # Override color to match contig_25 (green)
+    palette_csv: "data/circos/color_palette.csv"              # Optional CSV: chromosome,CCMP1545,RCC1749
+    strain_label_size: 36        # Side strain label font size
+    strain_label_padding: 25     # Side strain label x padding in pixels
+    strain_label_font: ""        # Optional font file for side labels
+    pycirclize_link_gradient_steps: 10  # Set 0 to disable gradient-like segmented links
+    pycirclize_link_gradient_alpha: 0.55
+    pycirclize_link_saturation: 1.35
+    pycirclize_link_radius: 72.0
+    pycirclize_exclude_sectors: "CCMP1545_0_scaffold_19;CCMP1545_0_scaffold_20;CCMP1545_0_scaffold_21;RCC1749_0_intronerless_contig_27"
+    pycirclize_reverse_rcc_link_pairs: "Chr41:Chr4;Chr25:Chr6;Chr10:Chr8;Chr17:Chr10;Chr19:Chr1"
 
   # Introner positional correlation analysis parameters
   introner_positional:
@@ -274,6 +336,13 @@ params:
     permutation_threads: 16      # Parallel workers for GO permutations
     permutation_batch_size: 1000 # Permutations per worker task
     permutation_seed: 20260521
+
+  # Group 1 polymorphic introner selective sweep screen
+  selection_sweeps:
+    window_sizes: [10000, 25000, 50000]
+    min_callable_sites: 20
+    background_windows_per_focal: 50
+    accepted_within_statuses: ["consistent", "singleton"]
 
 # ============================================================
 # PLOT CONFIGURATION
