@@ -27,6 +27,9 @@ ALIGNMENT_DIR = EXPRESSION_DIR / "alignments"
 COUNTS_DIR = EXPRESSION_DIR / "counts"
 SQANTI_DIR = EXPRESSION_DIR / "sqanti3"
 STRINGTIE_DIR = EXPRESSION_DIR / "stringtie"
+SPLICE_JUNCTION_DIR = EXPRESSION_DIR / "splice_junctions"
+REGTOOLS_JUNCTION_DIR = SPLICE_JUNCTION_DIR / "regtools" / "per_replicate"
+INTRONER_SPLICE_DIR = SPLICE_JUNCTION_DIR / "introner_boundary_support"
 EXPRESSION_LOG_DIR = EXPRESSION_DIR / "logs"
 
 # Input paths
@@ -671,6 +674,125 @@ rule parse_sqanti3_output:
 
 
 # ============================================================
+# INTRONER SPLICE-BOUNDARY VERIFICATION
+# ============================================================
+
+rule extract_splice_junctions_regtools:
+    """
+    Extract RNA-seq splice junctions from existing HISAT2 BAMs.
+
+    RegTools reports BED12 records. Downstream scoring converts BED12
+    anchors back to exact intron/junction coordinates.
+    """
+    input:
+        bam = ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam",
+        bai = ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam.bai"
+    output:
+        bed = REGTOOLS_JUNCTION_DIR / "{replicate}.junctions.bed"
+    log:
+        EXPRESSION_LOG_DIR / "splice_junctions" / "regtools" / "{replicate}.log"
+    conda: "../envs/splice_junctions.yaml"
+    shell:
+        """
+        mkdir -p $(dirname {output.bed})
+        mkdir -p $(dirname {log})
+
+        regtools junctions extract \
+            -a 8 \
+            -m 20 \
+            -M 500000 \
+            -s XS \
+            -o {output.bed} \
+            {input.bam} \
+            > {log} 2>&1
+        """
+
+
+rule score_introner_splice_boundary_support:
+    """
+    Score introner splice-boundary support and retention PSI per sample.
+    """
+    input:
+        matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        junctions = lambda wildcards: expand(
+            REGTOOLS_JUNCTION_DIR / "{replicate}.junctions.bed",
+            replicate=REPLICATES[wildcards.sample]
+        ),
+        bams = lambda wildcards: expand(
+            ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam",
+            replicate=REPLICATES[wildcards.sample]
+        ),
+        bais = lambda wildcards: expand(
+            ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam.bai",
+            replicate=REPLICATES[wildcards.sample]
+        )
+    output:
+        per_locus = INTRONER_SPLICE_DIR / "{sample}.per_locus.tsv",
+        summary = INTRONER_SPLICE_DIR / "{sample}.summary.tsv",
+        plot = FIGURES_DIR / "expression" / "{sample}.introner_splice_boundary_support.png"
+    params:
+        replicates = lambda wildcards: " ".join(REPLICATES[wildcards.sample]),
+        mating_contig = f"{REFERENCE}#0#{config['mating_type_region']['scaffold']}",
+        mating_start = config["mating_type_region"]["start"],
+        mating_end = config["mating_type_region"]["end"]
+    log:
+        EXPRESSION_LOG_DIR / "splice_junctions" / "score_{sample}.log"
+    conda: "../envs/splice_junctions.yaml"
+    shell:
+        """
+        mkdir -p $(dirname {output.per_locus})
+        mkdir -p $(dirname {output.plot})
+        mkdir -p $(dirname {log})
+
+        python {PROJECT_ROOT}/scripts/expression/score_introner_splice_junctions.py \
+            --matrix {input.matrix} \
+            --sample {wildcards.sample} \
+            --replicates {params.replicates} \
+            --junction-beds {input.junctions} \
+            --bams {input.bams} \
+            --per-locus {output.per_locus} \
+            --summary {output.summary} \
+            --plot {output.plot} \
+            --mating-contig '{params.mating_contig}' \
+            --mating-start {params.mating_start} \
+            --mating-end {params.mating_end} \
+            > {log} 2>&1
+        """
+
+
+rule merge_introner_splice_boundary_summaries:
+    """
+    Merge per-sample introner splice-boundary summaries.
+    """
+    input:
+        summaries = expand(INTRONER_SPLICE_DIR / "{sample}.summary.tsv", sample=RNA_SEQ_SAMPLES)
+    output:
+        summary = INTRONER_SPLICE_DIR / "all_samples.summary.tsv"
+    run:
+        import csv
+        import os
+
+        os.makedirs(os.path.dirname(str(output.summary)), exist_ok=True)
+        fieldnames = None
+        rows = []
+        for path in input.summaries:
+            sample = os.path.basename(str(path)).split(".summary.tsv")[0]
+            with open(str(path), newline="") as handle:
+                reader = csv.DictReader(handle, delimiter="\t")
+                if fieldnames is None:
+                    fieldnames = ["sample"] + (reader.fieldnames or [])
+                for row in reader:
+                    out_row = {"sample": sample}
+                    out_row.update(row)
+                    rows.append(out_row)
+
+        with open(str(output.summary), "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames or ["sample"], delimiter="\t")
+            writer.writeheader()
+            writer.writerows(rows)
+
+
+# ============================================================
 # TARGET RULES
 # ============================================================
 
@@ -708,3 +830,17 @@ rule stringtie_denovo:
     """
     input:
         expand(ANNOTATIONS_DIR / "{sample}.augmented.renamed.gtf", sample=RNA_SEQ_SAMPLES)
+
+
+rule introner_splice_boundary_verification:
+    """
+    Target: Verify introner splice boundaries and retention PSI from RNA-seq.
+    """
+    input:
+        INTRONER_SPLICE_DIR / "all_samples.summary.tsv",
+        expand(INTRONER_SPLICE_DIR / "{sample}.per_locus.tsv", sample=RNA_SEQ_SAMPLES),
+        expand(INTRONER_SPLICE_DIR / "{sample}.summary.tsv", sample=RNA_SEQ_SAMPLES),
+        expand(
+            FIGURES_DIR / "expression" / "{sample}.introner_splice_boundary_support.png",
+            sample=RNA_SEQ_SAMPLES
+        )
