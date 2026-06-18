@@ -4,6 +4,63 @@ from collections import defaultdict
 import os
 import sys
 
+def normalize_family(value):
+    """Return a stable string family label, or empty string if unknown."""
+    if pd.isnull(value):
+        return ''
+    text = str(value).strip()
+    if text == '' or text.lower() in {'nan', 'none'}:
+        return ''
+    try:
+        return str(int(float(text)))
+    except (ValueError, TypeError):
+        return text
+
+def split_group_by_family(group, graph):
+    """Partition a resolved group so known-family introners do not co-cluster.
+
+    Presence=1 nodes with known families define the partitions. Presence=2
+    nodes are copied into each compatible family partition they touch, because
+    the same absent locus can be evidence for multiple family-specific query
+    introners before the matrix is filled out.
+    """
+    family_to_nodes = defaultdict(list)
+    unknown_present = []
+    absent_nodes = []
+
+    for node in group:
+        attrs = graph.nodes[node]
+        if attrs.get('presence') == 1:
+            family = normalize_family(attrs.get('family', ''))
+            if family:
+                family_to_nodes[family].append(node)
+            else:
+                unknown_present.append(node)
+        else:
+            absent_nodes.append(node)
+
+    if len(family_to_nodes) <= 1:
+        return [list(group)]
+
+    split_groups = []
+    for family, nodes in sorted(family_to_nodes.items()):
+        node_set = set(nodes)
+        for node in absent_nodes:
+            for neighbor in graph.neighbors(node):
+                if neighbor in group and normalize_family(
+                        graph.nodes[neighbor].get('family', '')) == family:
+                    node_set.add(node)
+                    break
+        split_groups.append(list(node_set))
+
+    # Keep unknown-family present introners as separate groups unless they have
+    # no other way to survive. This avoids silently attaching them to a known
+    # family that may be wrong.
+    for node in unknown_present:
+        split_groups.append([node])
+
+    return split_groups
+
 def build_ortholog_groups(input_tsv):
     """
     Build ortholog groups from query-target pairs.
@@ -122,7 +179,9 @@ def build_ortholog_groups(input_tsv):
     # Build a graph of relationships
     G = nx.Graph()
     
-    # Add edges for each valid query-target pair
+    # Add edges for each valid query-target pair. Locus-level grouping uses
+    # flank/synteny evidence without blocking different-family edges; family
+    # partitioning happens later when assigning ortholog_id.
     for _, row in valid_df.iterrows():
         # Add nodes with metadata
         G.add_node(row['query_node'], 
@@ -131,7 +190,7 @@ def build_ortholog_groups(input_tsv):
                    start=int(row['query_start']) if row['query_start'] is not None else None,
                    end=int(row['query_end']) if row['query_end'] is not None else None,
                    gene=row['query_gene'],
-                   family=row['query_family'],
+                   family=normalize_family(row['query_family']),
                    splice_site=row['query_splice_site'],
                    introner_id=row['query_introner_id'],
                    presence=1)  # Query always has the introner
@@ -142,7 +201,7 @@ def build_ortholog_groups(input_tsv):
                    start=int(row['target_start']) if row['target_start'] is not None else None,
                    end=int(row['target_end']) if row['target_end'] is not None else None,
                    gene=row['target_gene'],
-                   family=row['target_family'],
+                   family=normalize_family(row['target_family']),
                    splice_site=row['target_splice_site'],
                    introner_id=row['target_introner_id'],
                    presence=1 if row['scenario'] == 1 else 2)  # Target presence depends on scenario
@@ -418,17 +477,51 @@ def build_ortholog_groups(input_tsv):
                 else:
                     print("DEBUG: *** OUR TARGET NODE WAS REMOVED DURING CONFLICT RESOLUTION ***")
     
+    locus_groups = list(resolved_groups)
+    node_to_locus_group = {}
+    n_mixed_family_locus_groups = 0
+    for i, group in enumerate(locus_groups):
+        locus_group_id = f"locus_group_id_{i+1:04d}"
+        carrier_families = {
+            normalize_family(G.nodes[node].get('family', ''))
+            for node in group
+            if G.nodes[node].get('presence') == 1
+        }
+        carrier_families.discard('')
+        if len(carrier_families) > 1:
+            n_mixed_family_locus_groups += 1
+        for node in group:
+            node_to_locus_group[node] = locus_group_id
+
+    print(f"\nAssigned {len(locus_groups)} locus groups")
+    print(f"Locus groups with multiple carrier families: {n_mixed_family_locus_groups}")
+
+    family_split_groups = []
+    n_family_split = 0
+    for group in locus_groups:
+        split_groups = split_group_by_family(group, G)
+        if len(split_groups) > 1:
+            n_family_split += 1
+        family_split_groups.extend(split_groups)
+    resolved_groups = family_split_groups
+
     print(f"\nAfter resolving conflicts: {len(resolved_groups)} ortholog groups")
+    print(f"Family-split components: {n_family_split}")
     print(f"Removed {removed_nodes_count} nodes during conflict resolution")
     print("Nodes removed by sample during conflict resolution:")
     for sample, count in sorted(removed_nodes_by_sample.items()):
         print(f"  {sample}: {count}")
     
-    # Create a mapping of nodes to ortholog groups
+    # Create a group-indexed mapping. A presence=2 node can be intentionally
+    # copied into multiple family-specific groups after family splitting.
+    group_records = []
     node_to_group = {}
     for i, group in enumerate(resolved_groups):
+        ortholog_id = f"ortholog_id_{i+1:04d}"
         for node in group:
-            node_to_group[node] = f"ortholog_id_{i+1:04d}"
+            group_records.append((node, ortholog_id))
+            if node not in node_to_group:
+                node_to_group[node] = ortholog_id
     
     # DEBUG - Check if our target node made it to final output
     if debug_query_node:
@@ -438,12 +531,12 @@ def build_ortholog_groups(input_tsv):
         else:
             print("DEBUG: *** TARGET NODE NOT FOUND IN FINAL ORTHOLOG GROUPS ***")
     
-    # Create the output dataframe
+    # Create the output dataframe and locus-group sidecar rows.
     rows = []
-    for node, ortholog_id in node_to_group.items():
-        # Get node attributes
+    locus_member_rows = []
+    for node, ortholog_id in group_records:
         attrs = G.nodes[node]
-        rows.append({
+        row = {
             'ortholog_id': ortholog_id,
             'sample': attrs['sample'],
             'start': attrs['start'],
@@ -453,7 +546,21 @@ def build_ortholog_groups(input_tsv):
             'family': attrs.get('family', ''),
             'gene': attrs.get('gene', ''),
             'splice_site': attrs.get('splice_site', ''),
-            'presence': attrs['presence']
+            'presence': attrs['presence'],
+        }
+        rows.append(row)
+        locus_member_rows.append({
+            'locus_group_id': node_to_locus_group.get(node, ''),
+            'ortholog_id': ortholog_id,
+            'sample': row['sample'],
+            'start': row['start'],
+            'end': row['end'],
+            'contig': row['contig'],
+            'sequence_id': row['sequence_id'],
+            'family': row['family'],
+            'gene': row['gene'],
+            'splice_site': row['splice_site'],
+            'presence': row['presence'],
         })
     
     # DEBUG - Track which introners made it to the final output
@@ -507,6 +614,7 @@ def build_ortholog_groups(input_tsv):
     
     # Convert to DataFrame
     result_df = pd.DataFrame(rows)
+    locus_members_df = pd.DataFrame(locus_member_rows)
     
     # Check that each sample appears only once per ortholog group
     validation = result_df.groupby(['ortholog_id', 'sample']).size().reset_index(name='count')
@@ -539,7 +647,7 @@ def build_ortholog_groups(input_tsv):
         })
     
     
-    return result_df
+    return result_df, locus_members_df
 
 def fill_missing_samples(df, all_samples):
     """
@@ -583,12 +691,22 @@ def fill_missing_samples(df, all_samples):
     
     return df
 
+def normalize_numeric_columns(df):
+    """Convert start/end/family to integers where possible."""
+    for col in ['start', 'end', 'family']:
+        if col in df.columns:
+            df[col] = df[col].apply(
+                lambda x: int(x) if pd.notnull(x) and str(x).strip() and not pd.isna(x) else x
+            )
+    return df
+
 def main():
     input_tsv = sys.argv[1]
     output_tsv = sys.argv[2]
+    locus_members_tsv = sys.argv[3] if len(sys.argv) > 3 else None
     
     # Build ortholog groups
-    result_df = build_ortholog_groups(input_tsv)
+    result_df, locus_members_df = build_ortholog_groups(input_tsv)
     
     # Get all unique samples
     all_samples = list(result_df['sample'].unique())
@@ -599,20 +717,24 @@ def main():
     
     # Sort by ortholog_id and sample
     result_df = result_df.sort_values(['ortholog_id', 'sample'])
+    locus_members_df = locus_members_df.sort_values(
+        ['locus_group_id', 'ortholog_id', 'sample']
+    )
     
-    # Convert numeric columns to the correct types
-    # For start and end, convert to integers but preserve empty strings
-    for col in ['start', 'end', 'family']:
-        # First, check if the column exists
-        if col in result_df.columns:
-            # Convert to integers where possible, but preserve empty strings
-            result_df[col] = result_df[col].apply(
-                lambda x: int(x) if pd.notnull(x) and str(x).strip() and not pd.isna(x) else x
-            )
+    result_df = normalize_numeric_columns(result_df)
+    locus_members_df = normalize_numeric_columns(locus_members_df)
     
     # Write to TSV with appropriate types
     result_df.to_csv(output_tsv, sep='\t', index=False)
     print(f"Wrote {len(result_df)} rows to {output_tsv}")
+
+    if locus_members_tsv:
+        locus_members_df.to_csv(locus_members_tsv, sep='\t', index=False)
+        locus_group_count = locus_members_df['locus_group_id'].nunique()
+        ortholog_count = locus_members_df['ortholog_id'].nunique()
+        print(f"Wrote {len(locus_members_df)} rows to {locus_members_tsv}")
+        print(f"Locus group sidecar: {locus_group_count} locus groups, "
+              f"{ortholog_count} raw ortholog groups")
     
     # Generate summary
     ortho_count = len(result_df['ortholog_id'].unique())

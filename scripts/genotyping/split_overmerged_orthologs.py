@@ -44,6 +44,19 @@ AA_CONTEXT_MISMATCH_TOLERANCE = 1
 FLANK_LENGTH = 100  # used to back-compute BED-style coordinates from body span
 
 
+def normalize_family(value):
+    """Return a stable string family label, or empty string if unknown."""
+    if value is None:
+        return ''
+    text = str(value).strip()
+    if text == '' or text.lower() in {'nan', 'none'}:
+        return ''
+    try:
+        return str(int(float(text)))
+    except (ValueError, TypeError):
+        return text
+
+
 def get_locus_key(fp):
     """Build a hybrid comparison key from a fingerprint dict.
 
@@ -167,6 +180,45 @@ def cluster_keys(keys, codon_tolerance):
     for i in range(n):
         for j in range(i + 1, n):
             if keys_within_tolerance(keys[i], keys[j], codon_tolerance):
+                union(i, j)
+
+    clusters = defaultdict(list)
+    for i in range(n):
+        clusters[find(i)].append(i)
+    return list(clusters.values())
+
+
+def family_locus_profiles_match(p1, p2, codon_tolerance):
+    """Check whether two (locus_key, family) profiles can co-cluster."""
+    key1, family1 = p1
+    key2, family2 = p2
+    if family1 and family2 and family1 != family2:
+        return False
+    return keys_within_tolerance(key1, key2, codon_tolerance)
+
+
+def cluster_family_locus_profiles(profiles, codon_tolerance):
+    """Cluster profiles while keeping different known families separate."""
+    n = len(profiles)
+    if n == 0:
+        return []
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if family_locus_profiles_match(profiles[i], profiles[j],
+                                           codon_tolerance):
                 union(i, j)
 
     clusters = defaultdict(list)
@@ -328,7 +380,7 @@ def locate_consensus_in_gtf(sample, gene_id, locus_key, cds_by_sample_gene):
 
 
 def find_matching_fingerprint(sample_gene_fps, target_key, codon_tolerance,
-                                used_coords):
+                                used_coords, target_family=''):
     """Search a sample's fingerprints for one matching a target locus key.
 
     Args:
@@ -345,18 +397,23 @@ def find_matching_fingerprint(sample_gene_fps, target_key, codon_tolerance,
         coord = (fp['contig'], int(fp['start']), int(fp['end']))
         if coord in used_coords:
             continue
+        if target_family:
+            fp_family = normalize_family(fp.get('family', ''))
+            if fp_family and fp_family != target_family:
+                continue
         fp_key = get_locus_key(fp)
         if keys_within_tolerance(fp_key, target_key, codon_tolerance):
             return fp
     return None
 
 
-def get_consensus_key_and_gene(cluster_indices, keys, members):
-    """Get the consensus key, gene_id, and a legacy location key for a cluster.
+def get_consensus_key_gene_family(cluster_indices, keys, members):
+    """Get the consensus key, gene_id, family, and legacy key for a cluster.
 
     Returns:
         consensus_key: hybrid key for matching via keys_within_tolerance
         consensus_gene: most common gene_id
+        consensus_family: most common known family
         fallback_location_key: the legacy codon/intron part of the consensus
             hybrid key, used for coordinate lookup in absent samples (since
             aa_ctx doesn't directly map to genomic positions).
@@ -364,16 +421,20 @@ def get_consensus_key_and_gene(cluster_indices, keys, members):
     cluster_keys = [keys[i] for i in cluster_indices if keys[i] is not None]
     cluster_members = [members[i] for i in cluster_indices]
     cluster_genes = [m.get('gene_id', '') for m in cluster_members]
+    cluster_families = [normalize_family(m.get('family', ''))
+                        for m in cluster_members]
 
     if not cluster_keys:
-        return None, '', None
+        return None, '', '', None
 
     # Hybrid keys have the form ('hybrid', aa_ctx, legacy_key). Pick the most
     # common one for the consensus.
     key_counts = Counter(cluster_keys)
     gene_counts = Counter(g for g in cluster_genes if g)
+    family_counts = Counter(f for f in cluster_families if f)
     consensus_key = key_counts.most_common(1)[0][0]
     consensus_gene = gene_counts.most_common(1)[0][0] if gene_counts else ''
+    consensus_family = family_counts.most_common(1)[0][0] if family_counts else ''
 
     # Extract the legacy part of the consensus key, or fall back to
     # searching for any member with a legacy key.
@@ -386,6 +447,13 @@ def get_consensus_key_and_gene(cluster_indices, keys, members):
                 fallback_key = k[2]
                 break
 
+    return consensus_key, consensus_gene, consensus_family, fallback_key
+
+
+def get_consensus_key_and_gene(cluster_indices, keys, members):
+    """Backward-compatible wrapper for callers that do not need family."""
+    consensus_key, consensus_gene, _, fallback_key = (
+        get_consensus_key_gene_family(cluster_indices, keys, members))
     return consensus_key, consensus_gene, fallback_key
 
 
@@ -461,6 +529,8 @@ def build_absent_row(template_row, presence='2', locus_coords=None,
 CROSS_GROUP_SPLIT_REASONS = {
     'different_position',  # positions aren't even in the same ballpark
     'close_diff_aa_ctx',   # codon numbers close but aa context disagrees
+    'compatible_diff_family',  # same/compatible position, different family
+    'exact_diff_family',       # exact same locus, different family
 }
 
 
@@ -502,6 +572,8 @@ def split_cross_group_mispair(oid, row_indices, matrix_rows, fps_by_coord,
             'fp': fp,
             'key': key,
             'gene_id': fp.get('gene_id', ''),
+            'family': normalize_family(row.get('family', '') or
+                                       fp.get('family', '')),
         })
 
     g1_members = [m for m in present_members if m['sample'] not in GROUP2_SAMPLES]
@@ -597,6 +669,63 @@ def split_cross_group_mispair(oid, row_indices, matrix_rows, fps_by_coord,
     ]
 
 
+def split_group_by_existing_family(oid, row_indices, matrix_rows):
+    """Split a group by existing presence=1 family labels.
+
+    This is a conservative fallback when codon/aa-context fingerprints are
+    missing or too sparse. It enforces the biological invariant that known
+    different introner families are not the same orthologous insertion.
+    """
+    family_to_members = defaultdict(list)
+    for idx in row_indices:
+        row = matrix_rows[idx]
+        if row['presence'] != '1':
+            continue
+        family = normalize_family(row.get('family', ''))
+        if family:
+            family_to_members[family].append(idx)
+
+    if len(family_to_members) <= 1:
+        return None
+
+    all_samples = []
+    sample_to_template = {}
+    for idx in row_indices:
+        sample = matrix_rows[idx]['sample']
+        if sample not in sample_to_template:
+            all_samples.append(sample)
+            sample_to_template[sample] = matrix_rows[idx]
+
+    result = []
+    for split_idx, family in enumerate(sorted(family_to_members), start=1):
+        rows = []
+        present_samples = set()
+
+        for idx in family_to_members[family]:
+            row = dict(matrix_rows[idx])
+            rows.append(row)
+            present_samples.add(row['sample'])
+
+        for sample in all_samples:
+            if sample in present_samples:
+                continue
+            template = sample_to_template[sample]
+            if template['presence'] == '1':
+                # A different-family introner is present in this sample. Do
+                # not force that row to be an absence for the current family;
+                # mark it uncallable in this family-specific subgroup.
+                rows.append(build_absent_row(template, presence='3'))
+            else:
+                rows.append(dict(template))
+
+        new_id = f"{oid}_famsplit{split_idx}"
+        for row in rows:
+            row['ortholog_id'] = new_id
+        result.append((new_id, rows, len(family_to_members), False))
+
+    return result
+
+
 def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
                                 fps_by_sample_gene, beds_by_coord, tandems,
                                 cds_by_sample_gene, codon_tolerance):
@@ -621,19 +750,25 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
             'fp': fp,
             'key': key,
             'gene_id': fp.get('gene_id', ''),
+            'family': normalize_family(row.get('family', '') or
+                                       fp.get('family', '')),
         })
 
     # Filter to those with valid fingerprints for clustering
     typed = [m for m in present_members if m['key'] is not None]
 
     if len(typed) < 2:
-        return None  # not splittable
+        return split_group_by_existing_family(oid, row_indices, matrix_rows)
 
     # Step 2: Check for within-group multi-clustering
-    g1_keys = [m['key'] for m in typed if m['sample'] not in GROUP2_SAMPLES]
-    g2_keys = [m['key'] for m in typed if m['sample'] in GROUP2_SAMPLES]
-    g1_clusters = cluster_keys(g1_keys, codon_tolerance) if g1_keys else []
-    g2_clusters = cluster_keys(g2_keys, codon_tolerance) if g2_keys else []
+    g1_profiles = [(m['key'], m['family'])
+                   for m in typed if m['sample'] not in GROUP2_SAMPLES]
+    g2_profiles = [(m['key'], m['family'])
+                   for m in typed if m['sample'] in GROUP2_SAMPLES]
+    g1_clusters = (cluster_family_locus_profiles(g1_profiles, codon_tolerance)
+                   if g1_profiles else [])
+    g2_clusters = (cluster_family_locus_profiles(g2_profiles, codon_tolerance)
+                   if g2_profiles else [])
 
     if len(g1_clusters) <= 1 and len(g2_clusters) <= 1:
         # No within-group multi-cluster. Check if this is a cross-group
@@ -644,14 +779,16 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
             return split_cross_group_mispair(
                 oid, row_indices, matrix_rows, fps_by_coord,
                 cds_by_sample_gene, codon_tolerance)
-        return None  # no over-merge of any kind
+        return split_group_by_existing_family(oid, row_indices, matrix_rows)
 
-    # Step 3: Compute the global cluster assignment
+    # Step 3: Compute the global cluster assignment. Family is part of the
+    # profile so same-position introners from different known families split.
     keys = [m['key'] for m in typed]
-    clusters = cluster_keys(keys, codon_tolerance)
+    profiles = [(m['key'], m['family']) for m in typed]
+    clusters = cluster_family_locus_profiles(profiles, codon_tolerance)
 
     if len(clusters) < 2:
-        return None  # nothing to split
+        return split_group_by_existing_family(oid, row_indices, matrix_rows)
 
     # Map from member idx -> cluster index
     member_to_cluster = {}
@@ -664,13 +801,42 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
     # aa_ctx key doesn't map directly to genomic positions).
     sub_consensuses = []
     for ci, cluster in enumerate(clusters):
-        ck, cgene, fallback = get_consensus_key_and_gene(cluster, keys, typed)
+        ck, cgene, cfam, fallback = get_consensus_key_gene_family(
+            cluster, keys, typed)
         sub_consensuses.append({
             'cluster_idx': ci,
             'key': ck,
             'gene': cgene,
+            'family': cfam,
             'fallback_key': fallback,
         })
+
+    # Presence=1 rows without usable fingerprints still carry family
+    # information. Keep them out of different-family locus clusters.
+    family_to_cluster = {
+        c['family']: c['cluster_idx']
+        for c in sub_consensuses
+        if c.get('family')
+    }
+    for m in present_members:
+        if m['idx'] in member_to_cluster:
+            continue
+        family = m.get('family', '')
+        if family and family in family_to_cluster:
+            member_to_cluster[m['idx']] = family_to_cluster[family]
+            continue
+        if family:
+            ci = len(clusters)
+            clusters.append([])
+            member_to_cluster[m['idx']] = ci
+            family_to_cluster[family] = ci
+            sub_consensuses.append({
+                'cluster_idx': ci,
+                'key': None,
+                'gene': m.get('gene_id', ''),
+                'family': family,
+                'fallback_key': None,
+            })
 
     # Step 5: Get all samples that were in the original group
     all_samples = []
@@ -716,6 +882,7 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
     for ci, consensus in enumerate(sub_consensuses):
         ckey = consensus['key']
         cgene = consensus['gene']
+        cfam = consensus.get('family', '')
         fallback_key = consensus.get('fallback_key')
 
         # Check if any presence=1 row in this cluster has a tandem flag
@@ -738,7 +905,8 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
                 sample_gene_fps = fps_by_sample_gene.get((sample, cgene), [])
                 matching_fp = find_matching_fingerprint(
                     sample_gene_fps, ckey, codon_tolerance,
-                    used_coords_per_sample[sample])
+                    used_coords_per_sample[sample],
+                    target_family=cfam)
 
             if matching_fp:
                 # Recovered a "lost" introner
@@ -880,7 +1048,8 @@ def main():
                     oid, row_indices, matrix_rows, fps_by_coord,
                     cds_by_sample_gene, args.codon_tolerance)
             else:
-                result = None
+                result = split_group_by_existing_family(
+                    oid, row_indices, matrix_rows)
         else:
             result = split_group_with_recovery(
                 oid, row_indices, matrix_rows, fps_by_coord, fps_by_sample_gene,
@@ -920,9 +1089,12 @@ def main():
         # is the cleanest signal since both split helpers use distinctive
         # suffixes: _split{n} for within-group, _cgsplit_{g1,g2} for
         # cross-group).
-        note = ('cross_group_split'
-                if any('_cgsplit_' in r[0] for r in result)
-                else 'split')
+        if any('_cgsplit_' in r[0] for r in result):
+            note = 'cross_group_split'
+        elif any('_famsplit' in r[0] for r in result):
+            note = 'family_split'
+        else:
+            note = 'split'
 
         for new_id, rows, _, has_tandem in result:
             output_rows.extend(rows)
