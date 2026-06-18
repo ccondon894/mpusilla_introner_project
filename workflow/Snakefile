@@ -86,6 +86,7 @@ wildcard_constraints:
 #   snp         - SNP population genetics (rules 20-24)
 #   expression  - Expression & GO analysis (rules 30-32, 40)
 #   microc      - Micro-C read processing and contact matrix generation
+#   random_forest - RF classifier for present/absent and pre-insertion tests (rule 60)
 #   all         - Load all modules (default)
 #
 # Examples:
@@ -107,13 +108,14 @@ LOAD_EVOLUTION = LOAD_ALL or "evolution" in MODULES
 LOAD_SNP = LOAD_ALL or "snp" in MODULES
 LOAD_EXPRESSION = LOAD_ALL or "expression" in MODULES
 LOAD_MICROC = LOAD_ALL or "microc" in MODULES
+LOAD_RANDOM_FOREST = LOAD_ALL or "random_forest" in MODULES
 
 # ============================================================
 # INCLUDE RULE FILES (conditional based on module selection)
 # ============================================================
 
 # Core genotyping pipeline (always needed as foundation)
-if LOAD_GENOTYPING or LOAD_EVOLUTION or LOAD_SNP or LOAD_EXPRESSION:
+if LOAD_GENOTYPING or LOAD_EVOLUTION or LOAD_SNP or LOAD_EXPRESSION or LOAD_RANDOM_FOREST:
     include: "rules/00_data_prep.smk"
     include: "rules/03_gtf_liftover.smk"
     include: "rules/04_blast_genotyping.smk"
@@ -152,6 +154,16 @@ if LOAD_EXPRESSION:
 # Micro-C processing and contact matrix generation
 if LOAD_MICROC:
     include: "rules/50_microc.smk"
+
+# Random forest classifier (requires expression, microc, and MUMmer coords)
+if LOAD_RANDOM_FOREST:
+    if not LOAD_EXPRESSION:
+        include: "rules/30_expression.smk"
+    if not LOAD_MICROC:
+        include: "rules/50_microc.smk"
+    if not LOAD_EVOLUTION:
+        include: "rules/12_genome_alignment_circos.smk"
+    include: "rules/60_random_forest_classifier.smk"
 
 # ============================================================
 # TARGET RULES

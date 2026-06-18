@@ -228,6 +228,70 @@ output:
   go_enrichment: "results/go_enrichment"
   figures: "results/figures"
   microc: "results/microc"
+  random_forest: "results/random_forest"
+
+# ============================================================
+# RANDOM FOREST CLASSIFIER
+# ============================================================
+
+random_forest:
+  train_sample: CCMP1545
+  test_sample: RCC1749
+
+  windows: [25, 50, 100]
+  junction_mask_bp: 3
+  boundary_max_abs_delta: 25
+
+  excluded_contigs:
+    CCMP1545:
+      - "CCMP1545#0#scaffold_2"
+    RCC1749:
+      - "RCC1749#0#intronerless_contig_28"
+
+  orientation:
+    mummer_pair:
+      - CCMP1545
+      - RCC1749
+    threshold: 0.8
+
+  enrichment:
+    microc_resolution: 1000
+    microc_window: 25000
+    microc_flank_windows: [25, 50, 250, 500]
+    include_expression: true
+    include_psi: false
+    expression_sample_prefix: "834"
+
+  modeling:
+    n_estimators: 500
+    random_state: 42
+    lofo_negative_mode: same_gene
+    lofo_min_test_pos: 20
+    lofo_min_test_neg: 20
+    preinsertion_controls_per_positive: 1
+    matched_gc_col: gc_combined_100
+    matched_gc_tolerance: 0.05
+    kmer_permutation_repeats: 100
+
+  feature_sets:
+    within_sample:
+      - composition
+      - kmer_left_right
+      - all
+      - microc
+      - kmer_left_right_microc_expression
+      - all_microc_codon_expression
+    cross_sample_sequence:
+      - composition
+      - kmer_left_right
+      - all
+    cross_sample_transfer:
+      - composition
+      - kmer_left_right
+      - all
+      - microc
+      - kmer_left_right_microc_expression
+      - all_microc_codon_expression
 
 # ============================================================
 # TOOL PARAMETERS
@@ -370,6 +434,14 @@ runtime:
 # ============================================================
 
 mating_type_region:
+  group1:
+    contig: "CCMP1545#0#scaffold_2"
+    scaffold: "scaffold_2"
+    start: 49808
+    end: 1730591
+  group2:
+    contig: "RCC1749#0#intronerless_contig_28"
+  # Legacy flat keys used by expression splice-junction rules
   scaffold: "scaffold_2"
   start: 49808
   end: 1730591
