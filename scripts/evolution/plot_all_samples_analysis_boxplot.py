@@ -1,26 +1,15 @@
 #!/usr/bin/env python3
 """
-Create a 2-panel violin plot figure for all-samples Dxy analysis.
+Create a combined violin plot for all-samples flank/body diversity analysis.
 
-Panel A uses the active all-samples flanking metrics. Panel B uses the active
-fixed-shared introner body Dxy metrics.
-
-`ancestral` collapses {ancestral, likely_ancestral, ancestral_low_identity};
-`independent` collapses {independent, likely_independent}.
-
-Panel A: Flanking region Dxy
-  - Group 1 present & Group 2 absent (clade-specific)
-  - Group 1 absent & Group 2 present (clade-specific)
-  - Ancestral (combined subcategories)
-  - Independent (combined subcategories)
-
-Panel B: Introner body Dxy (highlights sequence identity differences)
-  - Ancestral (expected: moderate Dxy from shared evolutionary history)
-  - Independent (expected: high Dxy — essentially unrelated sequences)
+The figure shows population-specific flanking Dxy and ancestral flanking/body
+Dxy on one axis, then polymorphic and Group 1 fixed introner-body pi on a
+second axis so the different value ranges remain legible.
 """
 
 import argparse
 import os
+os.environ.setdefault('MPLCONFIGDIR', '/scratch1/chris/tmp/matplotlib')
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
@@ -37,6 +26,8 @@ def parse_arguments():
                        help='All-samples diversity metrics TSV (flanking Dxy)')
     parser.add_argument('--body-dxy', required=True,
                        help='Fixed shared introner body Dxy TSV')
+    parser.add_argument('--body-decay', required=True,
+                       help='Introner body decay per-locus TSV with body pi')
     parser.add_argument('--output', required=True,
                        help='Output PNG file')
     parser.add_argument('--flank_length', required=True,
@@ -94,6 +85,15 @@ def perform_pairwise_tests(data_dict, comparisons, correction='bonferroni'):
                 results[(cat1, cat2)] = None
 
     return results
+
+
+def print_group_summary(key, vals):
+    """Print a compact summary for one plotted group."""
+    if vals:
+        print(f"  {key}: n={len(vals)}, median={np.median(vals):.4f}, "
+              f"mean={np.mean(vals):.4f}")
+    else:
+        print(f"  {key}: n=0")
 
 
 def make_boxplot_panel(ax, data_dict, labels, colors, ylabel, comparisons=None):
@@ -178,6 +178,49 @@ def make_boxplot_panel(ax, data_dict, labels, colors, ylabel, comparisons=None):
     ax.legend(loc='upper right', fontsize=10, frameon=True, edgecolor='black')
 
 
+def make_violin(ax, data_dict, labels, colors, ylabel, title):
+    """Create one violin plot with jittered points and mean diamonds."""
+    records = [
+        {'category': label, 'value': value}
+        for label, values in data_dict.items()
+        for value in values
+    ]
+    plot_df = pd.DataFrame(records)
+    if plot_df.empty:
+        ax.text(0.5, 0.5, 'No data available', ha='center', va='center',
+                transform=ax.transAxes)
+        return
+
+    palette = dict(zip(labels, colors))
+    sns.violinplot(x='category', y='value', hue='category', data=plot_df,
+                   order=labels, palette=palette, ax=ax, width=0.82,
+                   inner='quartile', cut=0, density_norm='width',
+                   legend=False, linewidth=1.2)
+    sns.stripplot(x='category', y='value', data=plot_df, order=labels, ax=ax,
+                  color='black', alpha=0.22, size=2.2, jitter=0.18, zorder=3)
+
+    means = [plot_df.loc[plot_df['category'] == label, 'value'].mean()
+             for label in labels]
+    ax.scatter(range(len(labels)), means, color='black', marker='D', s=72,
+               label='Mean', zorder=5, edgecolor='white', linewidth=0.9)
+
+    for idx, label in enumerate(labels):
+        n = plot_df.loc[plot_df['category'] == label, 'value'].notna().sum()
+        ax.text(idx, 0.985, f'n={n:,}', transform=ax.get_xaxis_transform(),
+                ha='center', va='top', fontsize=9, rotation=90)
+
+    ax.set_xlabel('')
+    ax.set_ylabel(ylabel, fontsize=15)
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=35, ha='right', fontsize=12)
+    ax.tick_params(axis='y', labelsize=12)
+    ax.grid(axis='y', linestyle=':', linewidth=0.8, alpha=0.5)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=12)
+    ax.legend(loc='upper right', fontsize=10, frameon=True, edgecolor='black')
+
+
 def main():
     args = parse_arguments()
 
@@ -188,93 +231,69 @@ def main():
     print(f"Loading fixed shared introner body Dxy from {args.body_dxy}")
     body_df = pd.read_csv(args.body_dxy, sep='\t')
 
+    print(f"Loading introner body pi from {args.body_decay}")
+    body_decay_df = pd.read_csv(args.body_decay, sep='\t')
+
     shared_flank_df = flanking_df[flanking_df['category'] == 'group1_fixed_group2_fixed']
     ancestral_flank_df = shared_flank_df[
         shared_flank_df['cross_group_status'].isin([
             'ancestral', 'likely_ancestral', 'ancestral_low_identity'
         ])
     ]
-    independent_flank_df = shared_flank_df[
-        shared_flank_df['cross_group_status'].isin([
-            'independent', 'likely_independent'
-        ])
-    ]
-
     ancestral_body_df = body_df[body_df['ancestry_class'] == 'ancestral']
-    independent_body_df = body_df[body_df['ancestry_class'] == 'independent']
 
-    # ---- Panel A: Flanking Dxy ----
-    print("\n=== Panel A: Flanking Dxy ===")
-
-    # Clade-specific boxes from the all-samples flanking metrics TSV
     g1_present_g2_absent = flanking_df[flanking_df['category'] == 'group1_fixed_group2_absent']['dxy_group1_group2'].dropna().tolist()
     g1_absent_g2_present = flanking_df[flanking_df['category'] == 'group1_absent_group2_fixed']['dxy_group1_group2'].dropna().tolist()
-
-    # Cross-group shared boxes from the active all-samples flanking metrics TSV
     ancestral_flank = ancestral_flank_df['dxy_group1_group2'].dropna().tolist()
-    independent_flank = independent_flank_df['dxy_group1_group2'].dropna().tolist()
-
-    panel_a_data = {
-        'g1_present_g2_absent': g1_present_g2_absent,
-        'g1_absent_g2_present': g1_absent_g2_present,
-        'ancestral': ancestral_flank,
-        'independent': independent_flank,
-    }
-    panel_a_labels = [
-        'G1 present\nG2 absent',
-        'G1 absent\nG2 present',
-        'Ancestral',
-        'Independent',
-    ]
-    panel_a_colors = ['#3b528b', '#B91C1C', '#2d6a4f', '#e76f51']
-
-    panel_a_comparisons = [
-        ('g1_present_g2_absent', 'g1_absent_g2_present'),
-        ('g1_absent_g2_present', 'ancestral'),
-        ('ancestral', 'independent'),
-    ]
-
-    for key, vals in panel_a_data.items():
-        if vals:
-            print(f"  {key}: n={len(vals)}, median={np.median(vals):.4f}, "
-                  f"mean={np.mean(vals):.4f}")
-        else:
-            print(f"  {key}: n=0")
-
-    # ---- Panel B: Introner Body Dxy ----
-    print("\n=== Panel B: Introner Body Dxy (ancestral vs independent) ===")
-
     ancestral_body = ancestral_body_df['dxy_introner'].dropna().tolist()
-    independent_body = independent_body_df['dxy_introner'].dropna().tolist()
 
-    panel_b_data = {
-        'ancestral': ancestral_body,
-        'independent': independent_body,
+    group1_body_df = body_decay_df[
+        body_decay_df['analysis_scope'].eq('group1_primary')
+    ]
+    polymorphic_body = group1_body_df[
+        group1_body_df['analysis_class'].eq('polymorphic')
+    ]['pi_introner_body'].dropna().tolist()
+    fixed_body = group1_body_df[
+        group1_body_df['analysis_class'].eq('fixed_present')
+    ]['pi_introner_body'].dropna().tolist()
+
+    dxy_data = {
+        'Population 1\nspecific flanks': g1_present_g2_absent,
+        'Population 2\nspecific flanks': g1_absent_g2_present,
+        'ancestral\nflanks': ancestral_flank,
+        'ancestral\nbody': ancestral_body,
     }
-    panel_b_labels = ['Ancestral', 'Independent']
-    panel_b_colors = ['#2d6a4f', '#B91C1C']
+    dxy_labels = list(dxy_data)
+    dxy_colors = [
+        '#3b528b',
+        '#B91C1C',
+        '#2d6a4f',
+        '#1f9e89',
+    ]
 
-    panel_b_comparisons = [('ancestral', 'independent')]
+    pi_data = {
+        'polymorphic\nbody': polymorphic_body,
+        'Population 1 fixed\nbody': fixed_body,
+    }
+    pi_labels = list(pi_data)
+    pi_colors = [
+        '#F58518',
+        '#7B2CBF',
+    ]
 
-    for key, vals in panel_b_data.items():
-        if vals:
-            print(f"  {key}: n={len(vals)}, median={np.median(vals):.4f}, "
-                  f"mean={np.mean(vals):.4f}")
-        else:
-            print(f"  {key}: n=0")
+    print("\n=== Dxy plot groups ===")
+    for key, vals in dxy_data.items():
+        print_group_summary(key, vals)
+    print("\n=== Pi plot groups ===")
+    for key, vals in pi_data.items():
+        print_group_summary(key, vals)
 
     # ---- Create figure ----
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
-
-    print("\nPanel A significance tests:")
-    make_boxplot_panel(ax1, panel_a_data, panel_a_labels, panel_a_colors,
-                       f'Flanking Dxy ({args.flank_length}bp)', panel_a_comparisons)
-    ax1.set_title('A. Flanking Region Divergence', fontsize=16, fontweight='bold', pad=15)
-
-    print("\nPanel B significance tests:")
-    make_boxplot_panel(ax2, panel_b_data, panel_b_labels, panel_b_colors,
-                       'Introner Body Dxy', panel_b_comparisons)
-    ax2.set_title('B. Introner Body Divergence (Shared Loci)', fontsize=16, fontweight='bold', pad=15)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7.5))
+    make_violin(ax1, dxy_data, dxy_labels, dxy_colors, 'Dxy',
+                f'Flank and ancestral-body Dxy ({args.flank_length} bp flanks)')
+    make_violin(ax2, pi_data, pi_labels, pi_colors, 'pi',
+                'Introner-body pi')
 
     plt.tight_layout()
 

@@ -38,6 +38,8 @@ ALIGNMENT_DIR = EVOLUTION_DIR / "alignments"
 DIVERSITY_DIR = EVOLUTION_DIR / "diversity_metrics"
 EVOLUTION_PLOTS_DIR = EVOLUTION_DIR / "plots"
 EVOLUTION_LOG_DIR = EVOLUTION_DIR / "logs"
+INTRONER_BODY_DECAY_DIR = EVOLUTION_DIR / "introner_body_decay"
+INTRONER_BODY_CONSENSUS_DIR = EVOLUTION_DIR / "introner_body_consensus"
 
 # Local aliases: later-loaded rule files (30_expression.smk,
 # 31_isoform_analysis.smk) redefine ALIGNMENT_DIR and DIVERSITY_DIR at
@@ -46,6 +48,9 @@ EVOLUTION_LOG_DIR = EVOLUTION_DIR / "logs"
 # of load order.
 _EVO_ALIGNMENT_DIR = ALIGNMENT_DIR
 _EVO_DIVERSITY_DIR = DIVERSITY_DIR
+INTRONER_BODY_DECAY_ALIGNMENT_DIR = _EVO_ALIGNMENT_DIR / "introner_body_decay"
+INTRONER_BODY_CONSENSUS_QC = INTRONER_BODY_CONSENSUS_DIR / "introner_body_consensus.qc.tsv"
+EVO_NON_REF_SAMPLES = [sample for sample in ALL_SAMPLES if sample != REFERENCE]
 
 # Input directories from previous steps
 COVERAGE_BAM_DIR = GENOTYPING_DIR / "coverage" / "bams"
@@ -288,6 +293,169 @@ rule build_ref_consensus:
         """
 
 
+rule make_introner_body_bed:
+    """
+    Create BED files for present introner bodies, excluding 100 bp matrix flanks.
+    """
+    input:
+        matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+    output:
+        bed = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.bed"
+    shell:
+        """
+        mkdir -p {INTRONER_BODY_CONSENSUS_DIR}
+        python {PROJECT_ROOT}/scripts/evolution/make_introner_body_bed.py \
+            {input.matrix} {wildcards.sample} {output.bed} \
+            --flank-length 100
+        """
+
+
+rule introner_body_mpileup:
+    """
+    Generate mpileup for non-reference introner bodies.
+    """
+    input:
+        bam = COVERAGE_BAM_DIR / "{sample}.sorted.bam",
+        bed = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.bed",
+        fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
+    output:
+        mpileup = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.mpileup.bcf"
+    params:
+        temp_dir = lambda wc: f"/scratch1/chris/tmp/introner_body_{wc.sample}_sort"
+    wildcard_constraints:
+        sample = "|".join(EVO_NON_REF_SAMPLES)
+    shell:
+        """
+        mkdir -p {params.temp_dir}
+        bcftools mpileup \
+            -d 100 -q 30 -Q 20 -A \
+            -f {input.fa} -R {input.bed} \
+            -Ou {input.bam} | \
+        bcftools sort -T {params.temp_dir} -Ob -o {output.mpileup}
+        rm -rf {params.temp_dir}
+        """
+
+
+rule introner_body_call_variants:
+    """
+    Call haploid variants for non-reference introner-body consensus.
+    """
+    input:
+        mpileup = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.mpileup.bcf",
+        fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
+    output:
+        vcf = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.vcf.gz",
+        filt_vcf = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz"
+    wildcard_constraints:
+        sample = "|".join(EVO_NON_REF_SAMPLES)
+    shell:
+        """
+        bcftools call -m --ploidy 1 -Ou {input.mpileup} | \
+        bcftools norm -f {input.fa} -m +both -Oz -o {output.vcf}
+        bcftools filter -i 'DP>=10' {output.vcf} -o {output.filt_vcf}
+        tabix -p vcf {output.filt_vcf}
+        """
+
+
+rule build_introner_body_consensus:
+    """
+    Build non-reference introner-body consensus FASTA from filtered variants.
+    """
+    input:
+        filt_vcf = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz",
+        bed = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.bed",
+        fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
+    output:
+        cons = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.consensus.fa"
+    params:
+        cons_genome = lambda wc: str(INTRONER_BODY_CONSENSUS_DIR / f"{wc.sample}.introner_body.tmp_consensus.fa")
+    wildcard_constraints:
+        sample = "|".join(EVO_NON_REF_SAMPLES)
+    shell:
+        """
+        bcftools consensus -a N -f {input.fa} -o {params.cons_genome} {input.filt_vcf}
+        bedtools getfasta -fi {params.cons_genome} -bed {input.bed} -fo {output.cons} -nameOnly
+        rm -f {params.cons_genome} {params.cons_genome}.fai
+        """
+
+
+rule build_ref_introner_body_consensus:
+    """
+    Extract reference introner-body sequences directly from the reference assembly.
+    """
+    input:
+        bed = INTRONER_BODY_CONSENSUS_DIR / f"{REFERENCE}.introner_body.bed",
+        fa = ASSEMBLIES_DIR / f"{REFERENCE}.vg_paths.fa"
+    output:
+        cons = INTRONER_BODY_CONSENSUS_DIR / f"{REFERENCE}.introner_body.consensus.fa"
+    shell:
+        """
+        bedtools getfasta -fi {input.fa} -bed {input.bed} -fo {output.cons} -nameOnly
+        """
+
+
+rule qc_introner_body_consensus:
+    """
+    Apply strict repetitive-region QC to non-reference introner-body consensus.
+    """
+    input:
+        bed = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.bed",
+        cons = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.consensus.fa",
+        bam = COVERAGE_BAM_DIR / "{sample}.sorted.bam",
+        fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
+    output:
+        qc = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.qc.tsv"
+    wildcard_constraints:
+        sample = "|".join(EVO_NON_REF_SAMPLES)
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/evolution/qc_introner_body_consensus.py \
+            --sample {wildcards.sample} \
+            --bed {input.bed} \
+            --consensus-fasta {input.cons} \
+            --bam {input.bam} \
+            --reference-fasta {input.fa} \
+            --output {output.qc} \
+            --reference-sample {REFERENCE}
+        """
+
+
+rule qc_ref_introner_body_consensus:
+    """
+    Mark reference introner-body consensus sequences as reference-derived QC pass.
+    """
+    input:
+        bed = INTRONER_BODY_CONSENSUS_DIR / f"{REFERENCE}.introner_body.bed",
+        cons = INTRONER_BODY_CONSENSUS_DIR / f"{REFERENCE}.introner_body.consensus.fa",
+        fa = ASSEMBLIES_DIR / f"{REFERENCE}.vg_paths.fa"
+    output:
+        qc = INTRONER_BODY_CONSENSUS_DIR / f"{REFERENCE}.introner_body.qc.tsv"
+    shell:
+        """
+        python {PROJECT_ROOT}/scripts/evolution/qc_introner_body_consensus.py \
+            --sample {REFERENCE} \
+            --bed {input.bed} \
+            --consensus-fasta {input.cons} \
+            --reference-fasta {input.fa} \
+            --output {output.qc} \
+            --reference-sample {REFERENCE}
+        """
+
+
+rule aggregate_introner_body_consensus_qc:
+    """
+    Combine per-sample introner-body QC tables.
+    """
+    input:
+        qcs = expand(INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.qc.tsv", sample=ALL_SAMPLES)
+    output:
+        qc = INTRONER_BODY_CONSENSUS_QC
+    shell:
+        """
+        awk 'FNR == 1 && NR != 1 {{next}} {{print}}' {input.qcs} > {output.qc}
+        """
+
+
 
 
 
@@ -399,11 +567,13 @@ rule calculate_shared_introner_body_dxy:
     """
     input:
         classification = _EVO_ALIGNMENT_DIR / "all_samples_classification_{flank_length}bp.json",
-        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        consensus = expand(INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.consensus.fa", sample=ALL_SAMPLES),
+        qc = INTRONER_BODY_CONSENSUS_QC
     output:
         body_dxy = _EVO_DIVERSITY_DIR / "shared_introner_body_dxy_{flank_length}bp.tsv"
     params:
-        assemblies_dir = ASSEMBLIES_DIR,
+        consensus_dir = INTRONER_BODY_CONSENSUS_DIR,
         diversity_dir = _EVO_DIVERSITY_DIR,
         alignment_dir = _EVO_ALIGNMENT_DIR / "introner_body",
         group1 = ' '.join(GROUP1_SAMPLES),
@@ -414,7 +584,8 @@ rule calculate_shared_introner_body_dxy:
         python {PROJECT_ROOT}/scripts/evolution/calculate_shared_introner_body_dxy.py \
             --genotype-matrix {input.genotype_matrix} \
             --classification {input.classification} \
-            --assemblies-dir {params.assemblies_dir} \
+            --consensus-dir {params.consensus_dir} \
+            --qc-table {input.qc} \
             --alignment-dir {params.alignment_dir} \
             --output {output.body_dxy} \
             --group1-samples {params.group1} \
@@ -424,14 +595,12 @@ rule calculate_shared_introner_body_dxy:
 
 rule plot_all_samples_analysis:
     """
-    Generate Dxy boxplot panels for all-samples diversity analysis.
-
-    Panel A: Flanking Dxy across fixation categories and shared-origin classes
-    Panel B: Introner body Dxy for shared-origin classes
+    Generate the combined all-samples diversity plot.
     """
     input:
         metrics = DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
-        body_dxy = _EVO_DIVERSITY_DIR / "shared_introner_body_dxy_{flank_length}bp.tsv"
+        body_dxy = _EVO_DIVERSITY_DIR / "shared_introner_body_dxy_{flank_length}bp.tsv",
+        body_decay = INTRONER_BODY_DECAY_DIR / "introner_body_decay.per_locus.tsv"
     output:
         box_plot = EVOLUTION_PLOTS_DIR / "all_samples_box_plots_{flank_length}bp.png"
     shell:
@@ -440,6 +609,7 @@ rule plot_all_samples_analysis:
         python {PROJECT_ROOT}/scripts/evolution/plot_all_samples_analysis_boxplot.py \
             --input {input.metrics} \
             --body-dxy {input.body_dxy} \
+            --body-decay {input.body_decay} \
             --output {output.box_plot} \
             --flank_length {wildcards.flank_length}
         """
@@ -580,8 +750,106 @@ rule plot_group1_box_plots:
 
 
 # ============================================================
+# INTRONER BODY SEQUENCE DECAY
+# ============================================================
+
+rule analyze_introner_body_decay:
+    """
+    Compare introner-body sequence decay between fixed-present and polymorphic introners.
+
+    The primary analysis is Group 1 fixed-present versus complete-call
+    polymorphic introners in the three largest present-introner families.
+    Group 2 is emitted as a low-power secondary comparison.
+    """
+    input:
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        consensus = expand(INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.consensus.fa", sample=ALL_SAMPLES),
+        qc = INTRONER_BODY_CONSENSUS_QC
+    output:
+        per_locus = INTRONER_BODY_DECAY_DIR / "introner_body_decay.per_locus.tsv",
+        summary = INTRONER_BODY_DECAY_DIR / "introner_body_decay.summary.tsv",
+        tests = INTRONER_BODY_DECAY_DIR / "introner_body_decay.tests.tsv",
+        plot = EVOLUTION_PLOTS_DIR / "introner_body_decay.top3_families.png"
+    params:
+        consensus_dir = INTRONER_BODY_CONSENSUS_DIR,
+        alignment_dir = INTRONER_BODY_DECAY_ALIGNMENT_DIR,
+        group1 = " ".join(GROUP1_SAMPLES),
+        group2 = " ".join(GROUP2_SAMPLES),
+        top_families = 3
+    log:
+        EVOLUTION_LOG_DIR / "introner_body_decay.log"
+    shell:
+        """
+        mkdir -p {INTRONER_BODY_DECAY_DIR} {params.alignment_dir} {EVOLUTION_PLOTS_DIR} $(dirname {log})
+        python {PROJECT_ROOT}/scripts/evolution/analyze_introner_body_decay.py \
+            --genotype-matrix {input.genotype_matrix} \
+            --consensus-dir {params.consensus_dir} \
+            --qc-table {input.qc} \
+            --alignment-dir {params.alignment_dir} \
+            --per-locus {output.per_locus} \
+            --summary {output.summary} \
+            --tests {output.tests} \
+            --plot {output.plot} \
+            --group1-samples {params.group1} \
+            --group2-samples {params.group2} \
+            --top-families {params.top_families} \
+            > {log} 2>&1
+        """
+
+
+rule summarize_introner_body_decay_tail:
+    """
+    Summarize high-pi polymorphic tail loci and frequency-level body decay.
+    """
+    input:
+        per_locus = INTRONER_BODY_DECAY_DIR / "introner_body_decay.per_locus.tsv"
+    output:
+        tail_loci = INTRONER_BODY_DECAY_DIR / "introner_body_decay.polymorphic_pi_tail.tsv",
+        frequency_summary = INTRONER_BODY_DECAY_DIR / "introner_body_decay.frequency_summary.tsv",
+        tail_summary = INTRONER_BODY_DECAY_DIR / "introner_body_decay.tail_summary.tsv",
+        plot = EVOLUTION_PLOTS_DIR / "introner_body_decay.frequency_tail_diagnostics.png"
+    log:
+        EVOLUTION_LOG_DIR / "introner_body_decay_tail.log"
+    shell:
+        """
+        mkdir -p {INTRONER_BODY_DECAY_DIR} {EVOLUTION_PLOTS_DIR} $(dirname {log})
+        python {PROJECT_ROOT}/scripts/evolution/summarize_introner_body_decay_tail.py \
+            --per-locus {input.per_locus} \
+            --tail-loci {output.tail_loci} \
+            --frequency-summary {output.frequency_summary} \
+            --tail-summary {output.tail_summary} \
+            --plot {output.plot} \
+            > {log} 2>&1
+        """
+
+
+# ============================================================
 # TARGET RULES
 # ============================================================
+
+rule introner_body_decay:
+    """
+    Target: introner-body sequence decay analysis for fixed vs polymorphic introners.
+    """
+    input:
+        INTRONER_BODY_DECAY_DIR / "introner_body_decay.per_locus.tsv",
+        INTRONER_BODY_DECAY_DIR / "introner_body_decay.summary.tsv",
+        INTRONER_BODY_DECAY_DIR / "introner_body_decay.tests.tsv",
+        EVOLUTION_PLOTS_DIR / "introner_body_decay.top3_families.png",
+        INTRONER_BODY_DECAY_DIR / "introner_body_decay.polymorphic_pi_tail.tsv",
+        INTRONER_BODY_DECAY_DIR / "introner_body_decay.frequency_summary.tsv",
+        INTRONER_BODY_DECAY_DIR / "introner_body_decay.tail_summary.tsv",
+        EVOLUTION_PLOTS_DIR / "introner_body_decay.frequency_tail_diagnostics.png"
+
+
+rule introner_body_consensus_only:
+    """
+    Target: strict introner-body consensus sequences and QC table.
+    """
+    input:
+        expand(INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.consensus.fa", sample=ALL_SAMPLES),
+        INTRONER_BODY_CONSENSUS_QC
+
 
 rule all_evolution_analysis:
     """

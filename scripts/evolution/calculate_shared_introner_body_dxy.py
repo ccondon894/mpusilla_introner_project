@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from Bio import SeqIO
+from Bio.Seq import Seq
 
 
 ANCESTRAL_CROSS_GROUP = {
@@ -39,7 +40,8 @@ def parse_arguments():
     )
     parser.add_argument("--genotype-matrix", required=True)
     parser.add_argument("--classification", required=True)
-    parser.add_argument("--assemblies-dir", required=True)
+    parser.add_argument("--consensus-dir", required=True)
+    parser.add_argument("--qc-table", required=True)
     parser.add_argument("--alignment-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--group1-samples", nargs="+", required=True)
@@ -91,31 +93,48 @@ def broad_origin(cross_group_status):
     return "unclassified"
 
 
-def load_assembly_cache(assemblies_dir, samples):
-    cache = {}
+def load_body_consensus(consensus_dir, samples):
+    sequences = {}
     for sample in samples:
-        fasta = Path(assemblies_dir) / f"{sample}.vg_paths.fa"
+        fasta = Path(consensus_dir) / f"{sample}.introner_body.consensus.fa"
         if not fasta.exists():
-            raise FileNotFoundError(f"Missing assembly FASTA: {fasta}")
-        cache[sample] = SeqIO.to_dict(SeqIO.parse(fasta, "fasta"))
-    return cache
+            raise FileNotFoundError(f"Missing introner-body consensus FASTA: {fasta}")
+        for record in SeqIO.parse(fasta, "fasta"):
+            name = record.id.split("::", 1)[0]
+            ortholog_id = name.split("|", 1)[0]
+            sequences[(sample, ortholog_id)] = str(record.seq).upper()
+    return sequences
 
 
-def extract_body_sequence(row, assembly_records, matrix_flank_length):
-    contig = row["contig"]
-    if pd.isna(contig) or contig not in assembly_records:
+def load_qc_table(path):
+    qc = pd.read_csv(path, sep="\t")
+    required = {
+        "sample",
+        "ortholog_id",
+        "qc_pass",
+        "qc_fail_reason",
+        "callable_fraction",
+        "softclip_read_fraction",
+        "low_concordance_fraction",
+        "mean_major_allele_fraction",
+        "depth_ratio",
+        "consensus_source",
+    }
+    missing = required - set(qc.columns)
+    if missing:
+        raise ValueError(f"QC table missing columns: {', '.join(sorted(missing))}")
+    qc["qc_pass"] = qc["qc_pass"].astype(str).str.lower().isin({"true", "1"})
+    return qc.set_index(["sample", "ortholog_id"], drop=False)
+
+
+def consensus_body_sequence(row, consensus):
+    key = (row["sample"], row["ortholog_id"])
+    seq = consensus.get(key)
+    if seq is None:
         return None
-
-    start = int(row["start"]) + matrix_flank_length
-    end = int(row["end"]) - matrix_flank_length
-    if start < 0 or end <= start:
-        return None
-
-    record = assembly_records[contig]
-    if end > len(record.seq):
-        return None
-
-    return str(record.seq[start:end]).upper()
+    if row.get("orientation", "") == "reverse":
+        seq = str(Seq(seq).reverse_complement()).upper()
+    return seq
 
 
 def run_mafft(ortholog_id, sequences, alignment_dir):
@@ -179,7 +198,8 @@ def main():
 
     df = pd.read_csv(args.genotype_matrix, sep="\t")
     all_samples = args.group1_samples + args.group2_samples
-    assembly_cache = load_assembly_cache(args.assemblies_dir, all_samples)
+    consensus = load_body_consensus(args.consensus_dir, all_samples)
+    qc = load_qc_table(args.qc_table)
 
     rows = []
     skipped = 0
@@ -201,24 +221,114 @@ def main():
         ]
 
         sequences = []
+        qc_reasons = []
+        callable_fractions = []
+        softclip_fractions = []
+        low_concordance_fractions = []
+        major_allele_fractions = []
+        depth_ratios = []
+        consensus_sources = []
         for sample in all_samples:
             sample_rows = locus[locus["sample"] == sample]
             if len(sample_rows) != 1:
+                qc_reasons.append(f"{sample}:missing_genotype_row")
                 continue
             row = sample_rows.iloc[0]
-            seq = extract_body_sequence(
-                row,
-                assembly_cache[sample],
-                args.matrix_flank_length,
-            )
-            if seq:
-                sequences.append((sample, seq))
+            qc_key = (sample, ortholog_id)
+            if qc_key not in qc.index:
+                qc_reasons.append(f"{sample}:missing_qc")
+                continue
+            qc_row = qc.loc[qc_key]
+            callable_fractions.append(float(qc_row["callable_fraction"]))
+            softclip_fractions.append(float(qc_row["softclip_read_fraction"]))
+            low_concordance_fractions.append(float(qc_row["low_concordance_fraction"]))
+            major_allele_fractions.append(float(qc_row["mean_major_allele_fraction"]))
+            depth_ratios.append(float(qc_row["depth_ratio"]))
+            consensus_sources.append(str(qc_row["consensus_source"]))
+            if not bool(qc_row["qc_pass"]):
+                qc_reasons.append(f"{sample}:{qc_row['qc_fail_reason']}")
+                continue
+            seq = consensus_body_sequence(row, consensus)
+            expected_len = int(row["end"]) - int(row["start"]) - 2 * args.matrix_flank_length
+            if seq is None:
+                qc_reasons.append(f"{sample}:missing_consensus")
+                continue
+            if len(seq) != expected_len:
+                qc_reasons.append(f"{sample}:length_mismatch_after_orientation")
+                continue
+            sequences.append((sample, seq))
 
         present_samples = {sample for sample, _ in sequences}
         if not set(args.group1_samples).issubset(present_samples):
+            rows.append(
+                {
+                    "ortholog_id": ortholog_id,
+                    "category": info["category"],
+                    "cross_group_status": cross_status,
+                    "ancestry_class": origin,
+                    "within_group_status": info.get("within_group_status", ""),
+                    "group1_present_count": info["group1_present_count"],
+                    "group2_present_count": info["group2_present_count"],
+                    "n_group1_seqs": 0,
+                    "n_group2_seqs": 0,
+                    "consensus_source": ",".join(sorted(set(consensus_sources))),
+                    "n_consensus_sequences": len(sequences),
+                    "n_qc_failed_present_carriers": len(all_samples) - len(sequences),
+                    "qc_drop_reason": ";".join(qc_reasons) if qc_reasons else "missing_group1_consensus",
+                    "mean_callable_fraction": (
+                        float(np.mean(callable_fractions)) if callable_fractions else np.nan
+                    ),
+                    "max_softclip_read_fraction": (
+                        max(softclip_fractions) if softclip_fractions else np.nan
+                    ),
+                    "max_low_concordance_fraction": (
+                        max(low_concordance_fractions)
+                        if low_concordance_fractions
+                        else np.nan
+                    ),
+                    "min_mean_major_allele_fraction": (
+                        min(major_allele_fractions) if major_allele_fractions else np.nan
+                    ),
+                    "max_depth_ratio": max(depth_ratios) if depth_ratios else np.nan,
+                    "dxy_introner": None,
+                }
+            )
             skipped += 1
             continue
         if not set(args.group2_samples).issubset(present_samples):
+            rows.append(
+                {
+                    "ortholog_id": ortholog_id,
+                    "category": info["category"],
+                    "cross_group_status": cross_status,
+                    "ancestry_class": origin,
+                    "within_group_status": info.get("within_group_status", ""),
+                    "group1_present_count": info["group1_present_count"],
+                    "group2_present_count": info["group2_present_count"],
+                    "n_group1_seqs": 0,
+                    "n_group2_seqs": 0,
+                    "consensus_source": ",".join(sorted(set(consensus_sources))),
+                    "n_consensus_sequences": len(sequences),
+                    "n_qc_failed_present_carriers": len(all_samples) - len(sequences),
+                    "qc_drop_reason": ";".join(qc_reasons) if qc_reasons else "missing_group2_consensus",
+                    "mean_callable_fraction": (
+                        float(np.mean(callable_fractions)) if callable_fractions else np.nan
+                    ),
+                    "max_softclip_read_fraction": (
+                        max(softclip_fractions) if softclip_fractions else np.nan
+                    ),
+                    "max_low_concordance_fraction": (
+                        max(low_concordance_fractions)
+                        if low_concordance_fractions
+                        else np.nan
+                    ),
+                    "min_mean_major_allele_fraction": (
+                        min(major_allele_fractions) if major_allele_fractions else np.nan
+                    ),
+                    "max_depth_ratio": max(depth_ratios) if depth_ratios else np.nan,
+                    "dxy_introner": None,
+                }
+            )
             skipped += 1
             continue
 
@@ -245,6 +355,23 @@ def main():
                 "group2_present_count": info["group2_present_count"],
                 "n_group1_seqs": len(group1_seqs),
                 "n_group2_seqs": len(group2_seqs),
+                "consensus_source": ",".join(sorted(set(consensus_sources))),
+                "n_consensus_sequences": len(sequences),
+                "n_qc_failed_present_carriers": len(all_samples) - len(sequences),
+                "qc_drop_reason": "PASS" if not qc_reasons else ";".join(qc_reasons),
+                "mean_callable_fraction": (
+                    float(np.mean(callable_fractions)) if callable_fractions else np.nan
+                ),
+                "max_softclip_read_fraction": (
+                    max(softclip_fractions) if softclip_fractions else np.nan
+                ),
+                "max_low_concordance_fraction": (
+                    max(low_concordance_fractions) if low_concordance_fractions else np.nan
+                ),
+                "min_mean_major_allele_fraction": (
+                    min(major_allele_fractions) if major_allele_fractions else np.nan
+                ),
+                "max_depth_ratio": max(depth_ratios) if depth_ratios else np.nan,
                 "dxy_introner": dxy_introner,
             }
         )
