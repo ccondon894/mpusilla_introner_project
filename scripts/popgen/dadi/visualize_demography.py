@@ -2,6 +2,9 @@
 
 import argparse
 import gzip
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,6 +14,13 @@ try:
     import demesdraw
 except ImportError:
     demesdraw = None
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from figure_color_guide import DEFAULT_GUIDE_PATH, get_color, load_color_guide
+
 
 def parse_best_fit(params_file):
     """Parse the best-fit parameters from model fits file"""
@@ -48,7 +58,13 @@ def count_bed_sites(path):
     return total
 
 
-def create_demographic_model(params, mutation_rate, target_length, ancestral_time_factor):
+def create_demographic_model(
+    params,
+    mutation_rate,
+    target_length,
+    ancestral_time_factor,
+    ancestral_width_factor,
+):
     """Create a demes demographic model from the best-fit parameters"""
     
     # Extract parameters
@@ -65,6 +81,10 @@ def create_demographic_model(params, mutation_rate, target_length, ancestral_tim
     # Convert relative population sizes to absolute sizes
     N1_abs = int(N1 * Ne_ancestral)
     N2_abs = int(N2 * Ne_ancestral)
+    ancestral_plot_size = min(
+        Ne_ancestral,
+        max(N1_abs, N2_abs) * ancestral_width_factor,
+    )
     
     # Convert split time from 2*Ne units to generations
     split_time_gens = int(T * 2 * Ne_ancestral)
@@ -77,6 +97,7 @@ def create_demographic_model(params, mutation_rate, target_length, ancestral_tim
     print(f"Ancestral Ne: {Ne_ancestral:,.0f}")
     print(f"Group 1 Ne: {N1_abs:,.0f}")
     print(f"Group 2 Ne: {N2_abs:,.0f}")
+    print(f"Ancestral tube plotting size: {ancestral_plot_size:,.0f}")
     print(f"Split time: {split_time_gens:,.0f} generations ago")
     print(f"Plot ancestral start time: {ancestral_start_time:,.0f} generations ago")
     print(f"Scaled migration M: {M:.6f}")
@@ -95,7 +116,7 @@ def create_demographic_model(params, mutation_rate, target_length, ancestral_tim
         epochs=[
             dict(
                 end_time=split_time_gens,
-                start_size=Ne_ancestral,
+                start_size=ancestral_plot_size,
             )
         ]
     )
@@ -126,19 +147,56 @@ def create_demographic_model(params, mutation_rate, target_length, ancestral_tim
     
     graph = b.resolve()
     graph.metadata["plot_ancestral_start_time"] = ancestral_start_time
+    graph.metadata["true_ancestral_ne"] = Ne_ancestral
+    graph.metadata["ancestral_plot_size"] = ancestral_plot_size
     return graph
 
-def visualize_demography(graph, params, output_pdf, output_png):
+
+def deme_plot_size(graph, name):
+    deme = next(deme for deme in graph.demes if deme.name == name)
+    return deme.epochs[0].start_size
+
+
+def plotting_positions(graph, daughter_ancestor_gap_factor):
+    """Position demes from edge-to-edge gaps instead of fixed midpoints."""
+    pop1_size = deme_plot_size(graph, "Population_1")
+    pop2_size = deme_plot_size(graph, "Population_2")
+    ancestral_size = deme_plot_size(graph, "ancestral")
+    gap = max(pop1_size, pop2_size, ancestral_size) * daughter_ancestor_gap_factor
+
+    pop1_half = pop1_size / 2
+    pop2_half = pop2_size / 2
+    ancestral_half = ancestral_size / 2
+    ancestral_mid = pop1_half + gap + ancestral_half
+    pop2_mid = ancestral_mid + ancestral_half + gap + pop2_half
+
+    return {
+        "Population_1": 0.0,
+        "ancestral": ancestral_mid,
+        "Population_2": pop2_mid,
+    }
+
+
+def visualize_demography(
+    graph,
+    params,
+    output_pdf,
+    output_png,
+    color_guide_path,
+    daughter_ancestor_gap_factor,
+):
     """Create visualization of the demographic model"""
 
     # Create the plot
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
 
+    guide = load_color_guide(color_guide_path)
+
     # Define custom colors for each population
     colors = {
-        'ancestral': "#2e8b57",
-        'Population_1': '#1f77b4',
-        'Population_2': "#ff8c00"
+        "ancestral": get_color("Ancestor", guide),
+        "Population_1": get_color("Population 1", guide),
+        "Population_2": get_color("Population 2", guide),
     }
 
     split_time = next(deme.start_time for deme in graph.demes if deme.name == "Population_1")
@@ -149,6 +207,7 @@ def visualize_demography(graph, params, output_pdf, output_png):
             ax=ax, 
             log_time=True, 
             colours=colors, 
+            positions=plotting_positions(graph, daughter_ancestor_gap_factor),
             labels="xticks-mid",
             num_lines_per_migration=2
         )
@@ -221,6 +280,11 @@ def main():
     parser.add_argument("--output_pdf", required=True, help="Output plot file (pdf)")
     parser.add_argument("--output_png", required=True, help="Output plot file (png)")
     parser.add_argument(
+        "--color-guide",
+        default=str(DEFAULT_GUIDE_PATH),
+        help="Master figure color guide TSV. Default: %(default)s",
+    )
+    parser.add_argument(
         "--mutation-rate",
         type=float,
         default=9.8e-10,
@@ -233,6 +297,26 @@ def main():
         help=(
             "How far above the fitted split time to start the ancestral deme "
             "for plotting. Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--ancestral-width-factor",
+        type=float,
+        default=3.5,
+        help=(
+            "Plotting-only cap for ancestral tube width, as a multiple of the "
+            "larger daughter population size. Set high to show the fitted "
+            "ancestral Ne at full width. Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--daughter-ancestor-gap-factor",
+        type=float,
+        default=0.35,
+        help=(
+            "Edge-to-edge gap between each daughter tube and the ancestral tube, "
+            "as a fraction of the widest plotted tube. Lower values shorten "
+            "ancestry arms. Default: %(default)s"
         ),
     )
     target = parser.add_mutually_exclusive_group()
@@ -266,10 +350,18 @@ def main():
         args.mutation_rate,
         target_length,
         args.ancestral_time_factor,
+        args.ancestral_width_factor,
     )
 
     print("\nGenerating visualization...")
-    fig = visualize_demography(graph, best_params, args.output_pdf, args.output_png)
+    fig = visualize_demography(
+        graph,
+        best_params,
+        args.output_pdf,
+        args.output_png,
+        args.color_guide,
+        args.daughter_ancestor_gap_factor,
+    )
 
     print(f"\nVisualization saved: {args.output_png}")
 

@@ -162,6 +162,8 @@ def main():
                         help="Reference GTF file")
     parser.add_argument("--introner_loci", required=True,
                         help="BED file of introner loci (with 100bp flanking)")
+    parser.add_argument("--include_mating_region", action="store_true",
+                        help="Keep introns in the CCMP1545 mating-type region")
     parser.add_argument("--output", required=True,
                         help="Output TSV catalog")
     args = parser.parse_args()
@@ -181,29 +183,34 @@ def main():
     print(f"  Removed {n_removed} introner-overlapping introns")
     print(f"  Retained {n_kept} non-introner introns in {len(nonintroner)} genes")
 
-    # Step 3b: Filter out genes in the mating-type region
+    # Step 3b: Filter out genes in the mating-type region unless explicitly kept
     MATING_CHROM = "CCMP1545#0#scaffold_2"
     MATING_START = 49808
     MATING_END = 1730591
 
-    n_mating_genes = 0
-    n_mating_introns = 0
-    filtered = {}
-    for gene_id, intron_list in nonintroner.items():
-        # Check if any intron in this gene falls within the mating-type region
-        in_mating = any(
-            contig == MATING_CHROM and istart <= MATING_END and iend >= MATING_START
-            for contig, istart, iend, _ in intron_list
-        )
-        if in_mating:
-            n_mating_genes += 1
-            n_mating_introns += len(intron_list)
-        else:
-            filtered[gene_id] = intron_list
-    nonintroner = filtered
-    n_kept_final = sum(len(v) for v in nonintroner.values())
-    print(f"  Removed {n_mating_introns} introns in {n_mating_genes} mating-type region genes")
-    print(f"  Final catalog: {n_kept_final} introns in {len(nonintroner)} genes")
+    if args.include_mating_region:
+        n_kept_final = sum(len(v) for v in nonintroner.values())
+        print("  Kept mating-type region introns")
+        print(f"  Final catalog: {n_kept_final} introns in {len(nonintroner)} genes")
+    else:
+        n_mating_genes = 0
+        n_mating_introns = 0
+        filtered = {}
+        for gene_id, intron_list in nonintroner.items():
+            # Check if any intron in this gene falls within the mating-type region
+            in_mating = any(
+                contig == MATING_CHROM and istart <= MATING_END and iend >= MATING_START
+                for contig, istart, iend, _ in intron_list
+            )
+            if in_mating:
+                n_mating_genes += 1
+                n_mating_introns += len(intron_list)
+            else:
+                filtered[gene_id] = intron_list
+        nonintroner = filtered
+        n_kept_final = sum(len(v) for v in nonintroner.values())
+        print(f"  Removed {n_mating_introns} introns in {n_mating_genes} mating-type region genes")
+        print(f"  Final catalog: {n_kept_final} introns in {len(nonintroner)} genes")
 
     # Step 4: Write output TSV
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)

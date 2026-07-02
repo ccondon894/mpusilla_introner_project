@@ -181,7 +181,7 @@ rule plot_phylogenetic_tree:
     - Group1 (intronerful): Blue
     - Group2 (intronerless): Red
 
-    Includes scale bar and bootstrap support values.
+    Includes a scale bar; bootstrap support values are omitted from the figure.
     """
     input:
         treefile = PHYLO_DIR / "mpusilla.snps.4d.rooted.treefile"
@@ -198,6 +198,7 @@ rule plot_phylogenetic_tree:
         python {PROJECT_ROOT}/scripts/popgen/iqtree/plot_tree_improved.py \
             -i {input.treefile} \
             -o {FIGURES_DIR}/snp_popgen/phylogenetic_tree \
+            --color-guide {PROJECT_ROOT}/master_figure_color_guide.tsv \
             2> {log}
         """
 

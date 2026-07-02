@@ -313,10 +313,12 @@ rule plot_glm_introner_effects:
         nb_coef = GLM_DIR / "negative_binomial_glm_coefficients.csv",
         script = PROJECT_ROOT / "scripts" / "expression" / "glm_modeling" / "plot_glm_model_effects.py"
     output:
-        forest_pdf = FIGURES_DIR / "glm_introner_coefficient_forest.pdf",
-        forest_png = FIGURES_DIR / "glm_introner_coefficient_forest.png",
-        prediction_pdf = FIGURES_DIR / "glm_introner_model_predictions.pdf",
-        prediction_png = FIGURES_DIR / "glm_introner_model_predictions.png",
+        forest_pdf = FIGURES_DIR / "glm_modeling" / "glm_introner_coefficient_forest.pdf",
+        forest_png = FIGURES_DIR / "glm_modeling" / "glm_introner_coefficient_forest.png",
+        prediction_pdf = FIGURES_DIR / "glm_modeling" / "glm_introner_model_predictions.pdf",
+        prediction_png = FIGURES_DIR / "glm_modeling" / "glm_introner_model_predictions.png",
+        combined_pdf = FIGURES_DIR / "glm_modeling" / "glm_introner_effects_combined.pdf",
+        combined_png = FIGURES_DIR / "glm_modeling" / "glm_introner_effects_combined.png",
         report = GLM_DIR / "glm_introner_effect_plots.txt"
     log:
         EXPRESSION_LOG_DIR / "plot_glm_introner_effects.log"
@@ -332,6 +334,8 @@ rule plot_glm_introner_effects:
             --forest-png {output.forest_png} \
             --prediction-pdf {output.prediction_pdf} \
             --prediction-png {output.prediction_png} \
+            --combined-pdf {output.combined_pdf} \
+            --combined-png {output.combined_png} \
             --report {output.report} \
             2> {log}
         """
@@ -350,8 +354,9 @@ rule glm_modeling_complete:
         GLM_DIR / "negative_binomial_glm_results.txt",
         GLM_DIR / "model_comparison.txt",
         FIGURES_DIR / "glm_effect_sizes.pdf",
-        FIGURES_DIR / "glm_introner_coefficient_forest.pdf",
-        FIGURES_DIR / "glm_introner_model_predictions.pdf"
+        FIGURES_DIR / "glm_modeling" / "glm_introner_coefficient_forest.pdf",
+        FIGURES_DIR / "glm_modeling" / "glm_introner_model_predictions.pdf",
+        FIGURES_DIR / "glm_modeling" / "glm_introner_effects_combined.pdf"
 
 
 rule poisson_glm_only:

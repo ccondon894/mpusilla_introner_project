@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from introner_rf.config import ModelConfig
@@ -42,6 +43,12 @@ def parse_args():
     )
     parser.add_argument("--n-repeats", type=int, default=20)
     parser.add_argument("--n-estimators", type=int, default=500)
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help="Number of parallel permutation jobs. Training still uses this value, but prediction is forced to one thread inside each permutation task.",
+    )
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
         "--output-dir",
@@ -113,6 +120,7 @@ def write_config(args, output_dir, windows):
         f"grouping: {args.grouping}",
         f"n_repeats: {args.n_repeats}",
         f"n_estimators: {args.n_estimators}",
+        f"n_jobs: {args.n_jobs}",
         "class_weight: balanced",
         f"random_state: {args.random_state}",
         "",
@@ -131,6 +139,41 @@ def build_feature_groups(feature_cols, grouping):
     if not feature_groups:
         raise ValueError(f"No feature groups found with grouping {grouping!r}")
     return feature_groups
+
+
+def permutation_group_rows(
+    clf,
+    X_test,
+    y_test,
+    baseline_roc_auc,
+    baseline_pr_auc,
+    group,
+    cols,
+    n_repeats,
+    random_state,
+):
+    rows = []
+    for repeat in range(1, n_repeats + 1):
+        rng = np.random.default_rng(random_state + repeat * 1_000 + sum(map(ord, group)))
+        permuted = X_test.copy()
+        order = rng.permutation(len(permuted))
+        permuted.loc[:, cols] = permuted[cols].to_numpy()[order, :]
+        permuted_prob = clf.predict_proba(permuted)[:, 1]
+        permuted_roc_auc = roc_auc_score(y_test, permuted_prob)
+        permuted_pr_auc = average_precision_score(y_test, permuted_prob)
+        rows.append({
+            "group": group,
+            "repeat": repeat,
+            "n_features": len(cols),
+            "features": ",".join(cols),
+            "baseline_roc_auc": baseline_roc_auc,
+            "permuted_roc_auc": permuted_roc_auc,
+            "roc_auc_importance": baseline_roc_auc - permuted_roc_auc,
+            "baseline_pr_auc": baseline_pr_auc,
+            "permuted_pr_auc": permuted_pr_auc,
+            "pr_auc_importance": baseline_pr_auc - permuted_pr_auc,
+        })
+    return rows
 
 
 def main():
@@ -157,14 +200,17 @@ def main():
         f"Using {len(feature_cols)} features in {len(feature_groups)} "
         f"{args.grouping} groups"
     )
+    print(f"Using {args.n_jobs} parallel worker processes for permutation tasks", flush=True)
 
     model_config = ModelConfig(
         n_estimators=args.n_estimators,
         class_weight="balanced",
         random_state=args.random_state,
-        n_jobs=-1,
+        n_jobs=args.n_jobs,
     )
     clf = train_model(train_df[feature_cols], train_df["label"], model_config=model_config)
+    if args.n_jobs != 1:
+        clf.set_params(n_jobs=1)
 
     X_test = test_df[feature_cols].copy()
     y_test = test_df["label"]
@@ -190,28 +236,22 @@ def main():
     predictions["prob_present"] = baseline_prob
     predictions.to_csv(output_dir / "baseline_predictions.tsv", sep="\t", index=False)
 
-    rng = np.random.default_rng(args.random_state)
-    rows = []
-    for group, cols in sorted(feature_groups.items()):
-        for repeat in range(1, args.n_repeats + 1):
-            permuted = X_test.copy()
-            order = rng.permutation(len(permuted))
-            permuted.loc[:, cols] = permuted[cols].to_numpy()[order, :]
-            permuted_prob = clf.predict_proba(permuted)[:, 1]
-            permuted_roc_auc = roc_auc_score(y_test, permuted_prob)
-            permuted_pr_auc = average_precision_score(y_test, permuted_prob)
-            rows.append({
-                "group": group,
-                "repeat": repeat,
-                "n_features": len(cols),
-                "features": ",".join(cols),
-                "baseline_roc_auc": baseline_roc_auc,
-                "permuted_roc_auc": permuted_roc_auc,
-                "roc_auc_importance": baseline_roc_auc - permuted_roc_auc,
-                "baseline_pr_auc": baseline_pr_auc,
-                "permuted_pr_auc": permuted_pr_auc,
-                "pr_auc_importance": baseline_pr_auc - permuted_pr_auc,
-            })
+    tasks = [
+        delayed(permutation_group_rows)(
+            clf,
+            X_test,
+            y_test,
+            baseline_roc_auc,
+            baseline_pr_auc,
+            group,
+            cols,
+            args.n_repeats,
+            args.random_state,
+        )
+        for group, cols in sorted(feature_groups.items())
+    ]
+    group_rows = Parallel(n_jobs=args.n_jobs, backend="loky")(tasks)
+    rows = [row for group_result in group_rows for row in group_result]
 
     by_repeat = pd.DataFrame(rows)
     summary = (

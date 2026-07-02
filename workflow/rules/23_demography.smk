@@ -133,6 +133,7 @@ rule visualize_demography:
             --target-bed {input.target_bed} \
             --mutation-rate 9.8e-10 \
             --ancestral-time-factor 10 \
+            --color-guide {PROJECT_ROOT}/master_figure_color_guide.tsv \
             --output_pdf {output.pdf} \
             --output_png {output.png} \
             2> {log}

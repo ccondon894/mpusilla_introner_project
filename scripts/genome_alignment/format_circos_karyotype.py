@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
 """
-Prepare the final Circos karyotype labels and optional chromosome colors.
+Prepare the final Circos karyotype labels and synteny-mirrored chromosome colors.
 
 The input karyotype is expected to use standard Circos lines:
     chr - chr_id label start end color
 
-If a palette CSV is supplied, it should contain:
-    chromosome,CCMP1545,RCC1749
-
-The chromosome column is interpreted as the homologous chromosome row, so row
-1 colors the first chromosome shown for each strain, row 2 colors the second,
-and so on. The value may be written as 1, Chr1, chr1, scaffold_1, etc. If no
-row/order match is found, the script falls back to matching the current label
-number. Hex colors are converted to generated Circos color names and written
-to a companion colors file. Existing Circos color names are passed through
-unchanged.
+Chromosome colors use alternating Population 1 dark/light blue and Population 2
+dark/light orange, keyed to the CCMP1545 synteny anchor chromosome index.
+Hex colors are converted to generated Circos color names and written to a
+companion colors file.
 """
 
 import argparse
-import csv
 import re
 import sys
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parent))
+
+from figure_color_guide import (
+    DEFAULT_GUIDE_PATH,
+    build_synteny_mirrored_chr_colors,
+    load_color_guide,
+)
 
 
 HEX_COLOR_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
@@ -32,18 +34,15 @@ def parse_args():
     parser.add_argument("--input", required=True, help="Input karyotype")
     parser.add_argument("--output", required=True, help="Output karyotype")
     parser.add_argument("--colors-output", required=True, help="Generated Circos color definitions")
+    parser.add_argument("--links", required=True, help="Synteny links TSV used for color mirroring")
     parser.add_argument("--strain1-name", required=True, help="First strain name, e.g. CCMP1545")
     parser.add_argument("--strain2-name", required=True, help="Second strain name, e.g. RCC1749")
-    parser.add_argument("--palette-csv", default="", help="Optional CSV with chromosome, strain1, strain2 colors")
+    parser.add_argument(
+        "--color-guide",
+        default=str(DEFAULT_GUIDE_PATH),
+        help="Master figure color guide TSV",
+    )
     return parser.parse_args()
-
-
-def chromosome_key(value):
-    """Return a normalized chromosome key such as '1' from Chr1/scaffold_1."""
-    match = re.search(r"(\d+)$", str(value).strip())
-    if match:
-        return str(int(match.group(1)))
-    return str(value).strip().lower()
 
 
 def display_label(label):
@@ -61,15 +60,12 @@ def strain_for_chr_id(chr_id, strain1_name, strain2_name):
     return None
 
 
-def color_name(strain, key):
-    safe_strain = re.sub(r"[^A-Za-z0-9]+", "_", strain).lower()
-    safe_key = re.sub(r"[^A-Za-z0-9]+", "_", key).strip("_").lower()
-    if safe_key.isdigit():
-        safe_key = f"chr{int(safe_key):02d}"
-    return f"{safe_strain}_{safe_key}"
+def circos_color_name(chr_id):
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", chr_id).strip("_").lower()
+    return f"chr_{safe}"
 
 
-def parse_color(value, strain, key, generated_colors):
+def parse_color(value, color_key, generated_colors):
     """Return the karyotype color token, adding hex definitions when needed."""
     value = str(value).strip()
     if not value:
@@ -80,50 +76,45 @@ def parse_color(value, strain, key, generated_colors):
         return value
 
     hex_value = match.group(1)
-    rgb = tuple(int(hex_value[i:i + 2], 16) for i in (0, 2, 4))
-    name = color_name(strain, key)
-    generated_colors[name] = rgb
-    return name
+    rgb = tuple(int(hex_value[i : i + 2], 16) for i in (0, 2, 4))
+    generated_colors[color_key] = rgb
+    return color_key
 
 
-def load_palette(path, strain1_name, strain2_name):
-    palette = {}
+def read_karyotype_entries(path, strain1_name, strain2_name):
+    entries = []
+    with open(path) as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            parts = stripped.split()
+            if len(parts) < 7 or parts[0] != "chr" or parts[1] != "-":
+                continue
+
+            chr_id = parts[2]
+            label = parts[3]
+            entries.append(
+                {
+                    "chr_id": chr_id,
+                    "label": label,
+                    "strain": strain_for_chr_id(chr_id, strain1_name, strain2_name),
+                    "parts": parts,
+                }
+            )
+    return entries
+
+
+def build_circos_color_tokens(chr_colors):
     generated_colors = {}
-
-    if not path:
-        return palette, generated_colors
-
-    with open(path, newline="") as handle:
-        reader = csv.DictReader(handle)
-        fieldnames = reader.fieldnames or []
-        normalized_fields = {field.strip().lower(): field for field in fieldnames}
-        required = {
-            "chromosome": "chromosome",
-            strain1_name.lower(): strain1_name,
-            strain2_name.lower(): strain2_name,
-        }
-        missing = [
-            display_name
-            for normalized_name, display_name in required.items()
-            if normalized_name not in normalized_fields
-        ]
-        if missing:
-            missing_text = ", ".join(sorted(missing))
-            sys.exit(f"Palette CSV is missing required column(s): {missing_text}")
-
-        for row in reader:
-            key = chromosome_key(row[normalized_fields["chromosome"]])
-            for strain in (strain1_name, strain2_name):
-                color = parse_color(
-                    row.get(normalized_fields[strain.lower()], ""),
-                    strain,
-                    key,
-                    generated_colors,
-                )
-                if color:
-                    palette[(strain, key)] = color
-
-    return palette, generated_colors
+    tokens = {}
+    for chr_id, hex_color in chr_colors.items():
+        color_key = circos_color_name(chr_id)
+        token = parse_color(hex_color, color_key, generated_colors)
+        if token:
+            tokens[chr_id] = token
+    return tokens, generated_colors
 
 
 def write_colors(path, generated_colors):
@@ -139,19 +130,7 @@ def write_colors(path, generated_colors):
             handle.write(f"{name} = {rgb[0]},{rgb[1]},{rgb[2]}\n")
 
 
-def palette_color_for_entry(palette, strain, order_index, label):
-    """Prefer homologous row/order colors, then fall back to label-number colors."""
-    if not strain:
-        return None
-
-    order_key = str(order_index)
-    label_key = chromosome_key(label)
-    return palette.get((strain, order_key)) or palette.get((strain, label_key))
-
-
-def format_karyotype(input_path, output_path, palette, strain1_name, strain2_name):
-    order_by_strain = {strain1_name: 0, strain2_name: 0}
-
+def format_karyotype(input_path, output_path, color_tokens, strain1_name, strain2_name):
     with open(input_path) as source, open(output_path, "w") as dest:
         for line in source:
             stripped = line.strip()
@@ -165,18 +144,8 @@ def format_karyotype(input_path, output_path, palette, strain1_name, strain2_nam
                 continue
 
             chr_id = parts[2]
-            strain = strain_for_chr_id(chr_id, strain1_name, strain2_name)
-            if strain:
-                order_by_strain[strain] += 1
-
-            color = palette_color_for_entry(
-                palette,
-                strain,
-                order_by_strain.get(strain, 0),
-                parts[3],
-            )
             parts[3] = display_label(parts[3])
-
+            color = color_tokens.get(chr_id)
             if color:
                 parts[6] = color
 
@@ -185,8 +154,21 @@ def format_karyotype(input_path, output_path, palette, strain1_name, strain2_nam
 
 def main():
     args = parse_args()
-    palette, generated_colors = load_palette(args.palette_csv, args.strain1_name, args.strain2_name)
-    format_karyotype(args.input, args.output, palette, args.strain1_name, args.strain2_name)
+    entries = read_karyotype_entries(args.input, args.strain1_name, args.strain2_name)
+    labels = {entry["chr_id"]: entry["label"] for entry in entries}
+    strains = {entry["chr_id"]: entry["strain"] for entry in entries}
+    guide_colors = load_color_guide(args.color_guide)
+    chr_colors = build_synteny_mirrored_chr_colors(
+        args.links,
+        [entry["chr_id"] for entry in entries],
+        labels,
+        strains,
+        args.strain1_name,
+        args.strain2_name,
+        guide=guide_colors,
+    )
+    color_tokens, generated_colors = build_circos_color_tokens(chr_colors)
+    format_karyotype(args.input, args.output, color_tokens, args.strain1_name, args.strain2_name)
     write_colors(args.colors_output, generated_colors)
 
 

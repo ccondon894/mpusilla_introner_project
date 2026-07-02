@@ -1,0 +1,11 @@
+name: sweepfinder
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - sweepfinder2
+  - python=3.12
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib

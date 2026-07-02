@@ -22,9 +22,27 @@ DEFAULT_FEATURE_SETS = [
     "codon",
     "microc",
     "expression",
+    "microc_expression",
+    "kmer_left_right_expression",
+    "kmer_left_right_microc",
     "kmer_left_right_microc_expression",
+    "all_microc",
+    "all_microc_codon",
+    "all_microc_expression",
     "all_microc_codon_expression",
 ]
+
+DELTA_COMPARISONS = [
+    ("kmer_left_right", "kmer_left_right_microc"),
+    ("kmer_left_right", "kmer_left_right_expression"),
+    ("kmer_left_right_microc", "kmer_left_right_microc_expression"),
+    ("all", "all_microc"),
+    ("all_microc", "all_microc_codon"),
+    ("all_microc", "all_microc_expression"),
+    ("all_microc_codon", "all_microc_codon_expression"),
+]
+
+METRIC_COLS = ["roc_auc", "pr_auc", "balanced_accuracy", "accuracy", "f1"]
 
 
 def parse_args():
@@ -139,6 +157,28 @@ def evaluate_feature_set(train_df, test_df, windows, feature_set, model_config):
     return row, predictions, feature_cols
 
 
+def summarize_deltas(summary):
+    rows = []
+    indexed = summary.set_index("feature_set")
+    for baseline, expanded in DELTA_COMPARISONS:
+        if baseline not in indexed.index or expanded not in indexed.index:
+            continue
+        row = {
+            "baseline_feature_set": baseline,
+            "expanded_feature_set": expanded,
+            "baseline_n_shared_features": int(indexed.loc[baseline, "n_shared_features"]),
+            "expanded_n_shared_features": int(indexed.loc[expanded, "n_shared_features"]),
+            "delta_n_shared_features": int(
+                indexed.loc[expanded, "n_shared_features"]
+                - indexed.loc[baseline, "n_shared_features"]
+            ),
+        }
+        for metric in METRIC_COLS:
+            row[f"delta_{metric}"] = indexed.loc[expanded, metric] - indexed.loc[baseline, metric]
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def main():
     args = parse_args()
     windows = parse_csv(args.windows)
@@ -186,17 +226,21 @@ def main():
     summary = pd.DataFrame(rows)
     predictions = pd.concat(prediction_frames, ignore_index=True)
     features = pd.DataFrame(feature_rows)
+    deltas = summarize_deltas(summary)
 
     summary_path = output_prefix.with_suffix(".summary.tsv")
     predictions_path = output_prefix.with_suffix(".predictions.tsv")
     features_path = output_prefix.with_suffix(".features.tsv")
+    deltas_path = output_prefix.with_suffix(".feature_set_deltas.tsv")
     summary.to_csv(summary_path, sep="\t", index=False)
     predictions.to_csv(predictions_path, sep="\t", index=False)
     features.to_csv(features_path, sep="\t", index=False)
+    deltas.to_csv(deltas_path, sep="\t", index=False)
     print(summary)
     print(f"Wrote {summary_path}")
     print(f"Wrote {predictions_path}")
     print(f"Wrote {features_path}")
+    print(f"Wrote {deltas_path}")
 
 
 if __name__ == "__main__":

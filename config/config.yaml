@@ -106,6 +106,7 @@ paths:
 
   # 4-fold degenerate site VCF for haplotype diversity analysis
   fourfold_vcf: "/scratch1/chris/introner-genotyping-pipeline/popgen_snp_data/mpusilla.snps.4d.notMT.group1.allsites.vcf.gz"
+  fourfold_all_samples_vcf: "/scratch1/chris/introner-genotyping-pipeline/popgen_snp_data/mpusilla.snps.4d.notMT.allsamples.allsites.vcf.gz"
 
 # ============================================================
 # MICRO-C DATASETS
@@ -268,18 +269,28 @@ random_forest:
     lofo_negative_mode: same_gene
     lofo_min_test_pos: 20
     lofo_min_test_neg: 20
+    gene_grouped_cv_splits: 5
     preinsertion_controls_per_positive: 1
     matched_gc_col: gc_combined_100
     matched_gc_tolerance: 0.05
     kmer_permutation_repeats: 100
+    kmer_permutation_threads: 25
 
   feature_sets:
     within_sample:
       - composition
       - kmer_left_right
       - all
+      - codon
       - microc
+      - expression
+      - microc_expression
+      - kmer_left_right_expression
+      - kmer_left_right_microc
       - kmer_left_right_microc_expression
+      - all_microc
+      - all_microc_codon
+      - all_microc_expression
       - all_microc_codon_expression
     cross_sample_sequence:
       - composition
@@ -289,8 +300,16 @@ random_forest:
       - composition
       - kmer_left_right
       - all
+      - codon
       - microc
+      - expression
+      - microc_expression
+      - kmer_left_right_expression
+      - kmer_left_right_microc
       - kmer_left_right_microc_expression
+      - all_microc
+      - all_microc_codon
+      - all_microc_expression
       - all_microc_codon_expression
 
 # ============================================================
@@ -363,14 +382,14 @@ params:
     insert_after: 25             # Insert moved contig after this one
     insert_before: 12            # Insert moved contig before this one
     move_contig_color: "hue080"  # Override color to match contig_25 (green)
-    palette_csv: "data/circos/color_palette.csv"              # Optional CSV: chromosome,CCMP1545,RCC1749
+    color_guide: "master_figure_color_guide.tsv"
     strain_label_size: 36        # Side strain label font size
     strain_label_padding: 25     # Side strain label x padding in pixels
     strain_label_font: ""        # Optional font file for side labels
-    pycirclize_link_gradient_steps: 10  # Set 0 to disable gradient-like segmented links
+    pycirclize_link_gradient_steps: 0  # Set 0 to disable gradient-like segmented links
     pycirclize_link_gradient_alpha: 0.55
     pycirclize_link_saturation: 1.35
-    pycirclize_link_radius: 72.0
+    pycirclize_link_radius: 69.0
     pycirclize_exclude_sectors: "CCMP1545_0_scaffold_19;CCMP1545_0_scaffold_20;CCMP1545_0_scaffold_21;RCC1749_0_intronerless_contig_27"
     pycirclize_reverse_rcc_link_pairs: "Chr41:Chr4;Chr25:Chr6;Chr10:Chr8;Chr17:Chr10;Chr19:Chr1"
 
@@ -406,7 +425,19 @@ params:
     window_sizes: [10000, 25000, 50000]
     min_callable_sites: 20
     background_windows_per_focal: 50
+    fixed_snp_min_spacing: 200000
     accepted_within_statuses: ["consistent", "singleton"]
+
+  # SweepFinder2 genome-wide CLR scan (Group 1, 4D neutral sites)
+  sweepfinder:
+    grid_spacing: 1000
+    clr_percentile: 99
+    region_merge_gap: 2000
+    permutations: 1000
+    folded: true
+    min_called_haplotypes: 8
+    flank_size: 100
+    seed: 42
 
 # ============================================================
 # PLOT CONFIGURATION

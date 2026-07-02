@@ -10,6 +10,9 @@ second axis so the different value ranges remain legible.
 import argparse
 import os
 os.environ.setdefault('MPLCONFIGDIR', '/scratch1/chris/tmp/matplotlib')
+import sys
+from pathlib import Path
+
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
@@ -17,6 +20,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from scipy.stats import mannwhitneyu
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from figure_color_guide import DEFAULT_GUIDE_PATH, get_color, load_color_guide
 
 
 def parse_arguments():
@@ -32,10 +40,12 @@ def parse_arguments():
                        help='Output PNG file')
     parser.add_argument('--flank_length', required=True,
                        help='Flanking sequence length for plot title')
+    parser.add_argument('--color-guide', default=str(DEFAULT_GUIDE_PATH),
+                       help='Master figure color guide TSV')
     return parser.parse_args()
 
 
-def add_significance_bar(ax, x1, x2, y, p_value, height_offset=0.02):
+def add_significance_bar(ax, x1, x2, y, p_value, height_offset):
     """Add a significance bar between two positions on the plot."""
     if p_value < 0.001:
         sig_text = '***'
@@ -47,7 +57,7 @@ def add_significance_bar(ax, x1, x2, y, p_value, height_offset=0.02):
         sig_text = 'ns'
 
     ax.plot([x1, x1, x2, x2], [y, y + height_offset, y + height_offset, y],
-            linewidth=1.5, color='black')
+            linewidth=1.3, color='black')
     ax.text((x1 + x2) / 2, y + height_offset, sig_text,
             ha='center', va='bottom', fontsize=12, fontweight='bold')
 
@@ -130,7 +140,7 @@ def make_boxplot_panel(ax, data_dict, labels, colors, ylabel, comparisons=None):
                    legend=False, linewidth=1.2)
 
     ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=13)
+    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=15)
 
     # Mean diamonds
     means = [np.mean(d) if len(d) > 0 else 0 for d in data_list]
@@ -138,7 +148,7 @@ def make_boxplot_panel(ax, data_dict, labels, colors, ylabel, comparisons=None):
               label='Mean', zorder=4, edgecolor='white', linewidth=1)
 
     ax.set_xlabel('')
-    ax.set_ylabel(ylabel, fontsize=16)
+    ax.set_ylabel(ylabel, fontsize=17)
     ax.tick_params(labelsize=13)
     ax.grid(False)
     ax.spines['top'].set_visible(False)
@@ -175,11 +185,55 @@ def make_boxplot_panel(ax, data_dict, labels, colors, ylabel, comparisons=None):
         needed_ylim = max_val + y_margin + n_bars * bar_spacing + max_val * 0.08
         ax.set_ylim(bottom=0, top=needed_ylim)
 
-    ax.legend(loc='upper right', fontsize=10, frameon=True, edgecolor='black')
+
+def add_pairwise_significance(ax, data_dict, labels, comparisons):
+    """Add Mann-Whitney U significance bars for selected comparisons."""
+    if not comparisons:
+        return
+
+    test_results = perform_pairwise_tests(data_dict, comparisons)
+    all_vals = [
+        value
+        for values in data_dict.values()
+        for value in values
+        if pd.notna(value)
+    ]
+    if not all_vals:
+        return
+
+    max_val = max(all_vals)
+    min_val = min(all_vals)
+    value_range = max(max_val - min_val, max_val * 0.08, 0.01)
+    y_base = max_val + value_range * 0.12
+    bar_spacing = value_range * 0.14
+    bar_height = value_range * 0.035
+
+    label_to_pos = {label: idx for idx, label in enumerate(labels)}
+    n_drawn = 0
+    for cat1, cat2 in comparisons:
+        result = test_results.get((cat1, cat2))
+        if result is None:
+            continue
+        y = y_base + n_drawn * bar_spacing
+        add_significance_bar(
+            ax,
+            label_to_pos[cat1],
+            label_to_pos[cat2],
+            y,
+            result['p_value_corrected'],
+            height_offset=bar_height,
+        )
+        print(f"  {cat1} vs {cat2}: p={result['p_value']:.2e} "
+              f"(corrected={result['p_value_corrected']:.2e}), "
+              f"n1={result['n1']}, n2={result['n2']}")
+        n_drawn += 1
+
+    if n_drawn:
+        ax.set_ylim(top=y_base + n_drawn * bar_spacing + value_range * 0.12)
 
 
-def make_violin(ax, data_dict, labels, colors, ylabel, title):
-    """Create one violin plot with jittered points and mean diamonds."""
+def make_violin(ax, data_dict, labels, colors, ylabel, title, comparisons=None):
+    """Create one violin plot with quartile guides and significance bars."""
     records = [
         {'category': label, 'value': value}
         for label, values in data_dict.items()
@@ -196,33 +250,21 @@ def make_violin(ax, data_dict, labels, colors, ylabel, title):
                    order=labels, palette=palette, ax=ax, width=0.82,
                    inner='quartile', cut=0, density_norm='width',
                    legend=False, linewidth=1.2)
-    sns.stripplot(x='category', y='value', data=plot_df, order=labels, ax=ax,
-                  color='black', alpha=0.22, size=2.2, jitter=0.18, zorder=3)
-
-    means = [plot_df.loc[plot_df['category'] == label, 'value'].mean()
-             for label in labels]
-    ax.scatter(range(len(labels)), means, color='black', marker='D', s=72,
-               label='Mean', zorder=5, edgecolor='white', linewidth=0.9)
-
-    for idx, label in enumerate(labels):
-        n = plot_df.loc[plot_df['category'] == label, 'value'].notna().sum()
-        ax.text(idx, 0.985, f'n={n:,}', transform=ax.get_xaxis_transform(),
-                ha='center', va='top', fontsize=9, rotation=90)
 
     ax.set_xlabel('')
-    ax.set_ylabel(ylabel, fontsize=15)
+    ax.set_ylabel(ylabel, fontsize=17)
     ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=35, ha='right', fontsize=12)
-    ax.tick_params(axis='y', labelsize=12)
-    ax.grid(axis='y', linestyle=':', linewidth=0.8, alpha=0.5)
+    ax.set_xticklabels(labels, rotation=35, ha='right', fontsize=14)
+    ax.tick_params(axis='y', labelsize=14)
+    ax.grid(False)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.set_title(title, fontsize=14, fontweight='bold', pad=12)
-    ax.legend(loc='upper right', fontsize=10, frameon=True, edgecolor='black')
+    add_pairwise_significance(ax, data_dict, labels, comparisons)
 
 
 def main():
     args = parse_arguments()
+    color_guide = load_color_guide(args.color_guide)
 
     # Load data
     print(f"Loading flanking diversity metrics from {args.input}")
@@ -265,20 +307,20 @@ def main():
     }
     dxy_labels = list(dxy_data)
     dxy_colors = [
-        '#3b528b',
-        '#B91C1C',
-        '#2d6a4f',
-        '#1f9e89',
+        get_color('Population 1', color_guide),
+        get_color('Population 2', color_guide),
+        get_color('Ancestor', color_guide),
+        get_color('Ancestor', color_guide),
     ]
 
     pi_data = {
-        'polymorphic\nbody': polymorphic_body,
-        'Population 1 fixed\nbody': fixed_body,
+        'Population 1\npolymorphic body': polymorphic_body,
+        'Population 1\nfixed body': fixed_body,
     }
     pi_labels = list(pi_data)
     pi_colors = [
-        '#F58518',
-        '#7B2CBF',
+        get_color('Population 1 Polymorphic', color_guide),
+        get_color('Population 1 Fixed', color_guide),
     ]
 
     print("\n=== Dxy plot groups ===")
@@ -290,10 +332,20 @@ def main():
 
     # ---- Create figure ----
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7.5))
+    dxy_comparisons = [
+        ('Population 1\nspecific flanks', 'Population 2\nspecific flanks'),
+        ('Population 1\nspecific flanks', 'ancestral\nflanks'),
+        ('Population 2\nspecific flanks', 'ancestral\nflanks'),
+        ('ancestral\nflanks', 'ancestral\nbody'),
+    ]
+    pi_comparisons = [
+        ('polymorphic\nbody', 'Population 1 fixed\nbody'),
+    ]
     make_violin(ax1, dxy_data, dxy_labels, dxy_colors, 'Dxy',
-                f'Flank and ancestral-body Dxy ({args.flank_length} bp flanks)')
-    make_violin(ax2, pi_data, pi_labels, pi_colors, 'pi',
-                'Introner-body pi')
+                f'Flank and ancestral-body Dxy ({args.flank_length} bp flanks)',
+                comparisons=dxy_comparisons)
+    make_violin(ax2, pi_data, pi_labels, pi_colors, 'Pi',
+                'Introner-body pi', comparisons=pi_comparisons)
 
     plt.tight_layout()
 

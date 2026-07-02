@@ -34,6 +34,7 @@ LD_DIR = SELECTION_DIR / "ld"
 SFS_DIR = SELECTION_DIR / "sfs"
 RECOMB_DIR = SELECTION_DIR / "recombination"
 SWEEP_DIR = SELECTION_DIR / "sweeps"
+FIXED_SNP_SWEEP_DIR = SWEEP_DIR / "fixed_snp_control"
 SELECTION_LOG_DIR = SNP_DIR / "logs" / "selection"
 SNPEFF_DIR = SNP_DIR / "snpeff"
 
@@ -46,9 +47,22 @@ SWEEP_CONFIG = config["params"].get("selection_sweeps", {})
 SWEEP_WINDOW_SIZES = SWEEP_CONFIG.get("window_sizes", [10000, 25000, 50000])
 SWEEP_MIN_CALLABLE_SITES = SWEEP_CONFIG.get("min_callable_sites", 20)
 SWEEP_BACKGROUNDS_PER_FOCAL = SWEEP_CONFIG.get("background_windows_per_focal", 50)
+SWEEP_FIXED_SNP_MIN_SPACING = SWEEP_CONFIG.get("fixed_snp_min_spacing", max(SWEEP_WINDOW_SIZES))
 SWEEP_ACCEPTED_WITHIN_STATUSES = SWEEP_CONFIG.get(
     "accepted_within_statuses", ["consistent", "singleton"]
 )
+
+# SweepFinder2 genome-wide CLR scan parameters
+SF2_DIR = SWEEP_DIR / "sweepfinder"
+SF2_CONFIG = config["params"].get("sweepfinder", {})
+SF2_GRID_SPACING = SF2_CONFIG.get("grid_spacing", 1000)
+SF2_CLR_PERCENTILE = SF2_CONFIG.get("clr_percentile", 99)
+SF2_REGION_MERGE_GAP = SF2_CONFIG.get("region_merge_gap", 2000)
+SF2_PERMUTATIONS = SF2_CONFIG.get("permutations", 1000)
+SF2_MIN_CALLED_HAPLOTYPES = SF2_CONFIG.get("min_called_haplotypes", 8)
+SF2_FLANK_SIZE = SF2_CONFIG.get("flank_size", 100)
+SF2_SEED = SF2_CONFIG.get("seed", 42)
+CCMP1545_GRAPH_FAI = PROJECT_ROOT / f"{config['paths']['references']['ccmp1545_graph']}.fai"
 
 
 # ============================================================
@@ -92,6 +106,8 @@ rule plot_sfs_by_class:
     input:
         snpeff_vcf = SNPEFF_DIR / "mpusilla.snps.snpEff.no_MT.vcf",
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        non_introner_matrix = RESULTS / "evolution" / "non_introner_introns" / "intron_genotype_matrix.tsv",
+        color_guide = PROJECT_ROOT / "master_figure_color_guide.tsv",
         script = PROJECT_ROOT / "scripts" / "popgen" / "polymorphism_analysis" / "plot_afs_by_class.py"
     output:
         tsv = SFS_DIR / "afs_by_class.tsv",
@@ -108,11 +124,13 @@ rule plot_sfs_by_class:
         python {input.script} \
             --snpeff_vcf {input.snpeff_vcf} \
             --genotype_matrix {input.genotype_matrix} \
+            --non_introner_matrix {input.non_introner_matrix} \
             --group1 {params.group1_str} \
             --outgroup {params.outgroup_str} \
             --output_tsv {output.tsv} \
             --output_pdf {output.pdf} \
             --output_png {output.png} \
+            --color_guide {input.color_guide} \
             2> {log}
         """
 
@@ -202,6 +220,292 @@ rule calculate_group1_introner_sweep_windows:
             --pvalues {output.pvalues} \
             --plot-png {output.plot_png} \
             --plot-pdf {output.plot_pdf} \
+            > {log} 2>&1
+        """
+
+
+# ============================================================
+# FIXED SNP SWEEP CONTROL
+# ============================================================
+
+rule build_fixed_snp_sweep_targets:
+    """
+    Build 4D SNP targets fixed between Group 1 and Group 2.
+
+    These provide a same-timescale control for fixed introner loci: each target
+    is a biallelic 4D SNP where all Group 1 samples carry one allele and all
+    Group 2 samples carry the other allele.
+    """
+    input:
+        vcf = config["paths"]["fourfold_all_samples_vcf"]
+    output:
+        tsv = FIXED_SNP_SWEEP_DIR / "fixed_snp_targets.tsv",
+        bed = FIXED_SNP_SWEEP_DIR / "fixed_snp_targets.bed"
+    params:
+        group1 = ",".join(GROUP1_SAMPLES),
+        group2 = ",".join(GROUP2_SAMPLES),
+        min_spacing = SWEEP_FIXED_SNP_MIN_SPACING,
+        mating_contig = lambda wildcards: f"{REFERENCE}#0#{config['mating_type_region']['scaffold']}",
+        mating_start = config["mating_type_region"]["start"],
+        mating_end = config["mating_type_region"]["end"]
+    log:
+        SELECTION_LOG_DIR / "build_fixed_snp_sweep_targets.log"
+    conda: "../envs/popgen.yaml"
+    shell:
+        """
+        mkdir -p {FIXED_SNP_SWEEP_DIR} {SELECTION_LOG_DIR}
+
+        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/build_fixed_snp_sweep_targets.py \
+            --vcf {input.vcf} \
+            --output-tsv {output.tsv} \
+            --output-bed {output.bed} \
+            --group1-samples {params.group1} \
+            --group2-samples {params.group2} \
+            --min-spacing {params.min_spacing} \
+            --mating-contig {params.mating_contig} \
+            --mating-start {params.mating_start} \
+            --mating-end {params.mating_end} \
+            > {log} 2>&1
+        """
+
+
+rule calculate_fixed_snp_sweep_windows:
+    """
+    Compare sweep statistics around fixed 4D SNPs to matched non-focal
+    background windows in the Group 1 4D all-sites VCF.
+    """
+    input:
+        vcf = config["paths"]["fourfold_vcf"],
+        targets = FIXED_SNP_SWEEP_DIR / "fixed_snp_targets.tsv"
+    output:
+        fixed_snp_windows = FIXED_SNP_SWEEP_DIR / "fixed_snp_windows.tsv",
+        background_windows = FIXED_SNP_SWEEP_DIR / "fixed_snp_background_windows.tsv",
+        pvalues = FIXED_SNP_SWEEP_DIR / "fixed_snp_sweep_empirical_pvalues.tsv",
+        plot_png = FIGURES_DIR / "snp_popgen" / "fixed_snp_sweep_summary.png",
+        plot_pdf = FIGURES_DIR / "snp_popgen" / "fixed_snp_sweep_summary.pdf"
+    params:
+        samples = ",".join(GROUP1_SAMPLES),
+        window_sizes = ",".join(map(str, SWEEP_WINDOW_SIZES)),
+        min_callable_sites = SWEEP_MIN_CALLABLE_SITES,
+        backgrounds_per_focal = SWEEP_BACKGROUNDS_PER_FOCAL
+    log:
+        SELECTION_LOG_DIR / "calculate_fixed_snp_sweep_windows.log"
+    conda: "../envs/popgen.yaml"
+    shell:
+        """
+        mkdir -p {FIXED_SNP_SWEEP_DIR} {FIGURES_DIR}/snp_popgen {SELECTION_LOG_DIR}
+
+        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/calculate_group1_introner_sweep_windows.py \
+            --vcf {input.vcf} \
+            --targets {input.targets} \
+            --samples {params.samples} \
+            --window-sizes {params.window_sizes} \
+            --min-callable-sites {params.min_callable_sites} \
+            --backgrounds-per-focal {params.backgrounds_per_focal} \
+            --introner-windows {output.fixed_snp_windows} \
+            --background-windows {output.background_windows} \
+            --pvalues {output.pvalues} \
+            --plot-png {output.plot_png} \
+            --plot-pdf {output.plot_pdf} \
+            --focal-label "fixed SNP" \
+            > {log} 2>&1
+        """
+
+
+# ============================================================
+# SWEEPFINDER2 GENOME-WIDE CLR SCAN
+# ============================================================
+
+rule build_sweepfinder_input:
+    """
+    Build SweepFinder2 allele-frequency and uniform grid files from the Group 1
+    4D all-sites VCF (folded polymorphic sites, CCMP1545 reference frame).
+    """
+    input:
+        vcf = config["paths"]["fourfold_vcf"],
+        fai = CCMP1545_GRAPH_FAI
+    output:
+        combined_freq = SF2_DIR / "combined.freq",
+        contigs = SF2_DIR / "contigs.tsv",
+        freq_dir = directory(SF2_DIR / "freq"),
+        grid_dir = directory(SF2_DIR / "grid")
+    params:
+        samples = ",".join(GROUP1_SAMPLES),
+        grid_spacing = SF2_GRID_SPACING,
+        min_called_haplotypes = SF2_MIN_CALLED_HAPLOTYPES,
+        mating_contig = lambda wildcards: f"{REFERENCE}#0#{config['mating_type_region']['scaffold']}",
+        mating_start = config["mating_type_region"]["start"],
+        mating_end = config["mating_type_region"]["end"],
+        exclude_contigs = lambda wildcards: f"{REFERENCE}#0#{config['mating_type_region']['scaffold']}"
+    log:
+        SELECTION_LOG_DIR / "build_sweepfinder_input.log"
+    conda: "../envs/sweepfinder.yaml"
+    shell:
+        """
+        mkdir -p {SF2_DIR}/freq {SF2_DIR}/grid {SELECTION_LOG_DIR}
+
+        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/build_sweepfinder_input.py \
+            --vcf {input.vcf} \
+            --fai {input.fai} \
+            --samples {params.samples} \
+            --output-dir {SF2_DIR} \
+            --combined-freq {output.combined_freq} \
+            --contigs-tsv {output.contigs} \
+            --grid-spacing {params.grid_spacing} \
+            --min-called-haplotypes {params.min_called_haplotypes} \
+            --mating-contig {params.mating_contig} \
+            --mating-start {params.mating_start} \
+            --mating-end {params.mating_end} \
+            --exclude-contigs {params.exclude_contigs} \
+            > {log} 2>&1
+        """
+
+
+rule compute_sweepfinder_spectrum:
+    """
+    Compute the genome-wide empirical folded SFS for SweepFinder2 (-f).
+    """
+    input:
+        combined_freq = SF2_DIR / "combined.freq"
+    output:
+        spectrum = SF2_DIR / "spectrum.out"
+    log:
+        SELECTION_LOG_DIR / "compute_sweepfinder_spectrum.log"
+    conda: "../envs/sweepfinder.yaml"
+    shell:
+        """
+        SweepFinder2 -f {input.combined_freq} {output.spectrum} > {log} 2>&1
+        """
+
+
+rule run_sweepfinder_scan:
+    """
+    Run SweepFinder2 CLR scan (-lu) on each contig using pre-computed spectrum.
+    """
+    input:
+        contigs = SF2_DIR / "contigs.tsv",
+        spectrum = SF2_DIR / "spectrum.out",
+        freq_dir = SF2_DIR / "freq",
+        grid_dir = SF2_DIR / "grid"
+    output:
+        marker = SF2_DIR / "scan_complete.txt",
+        clr_dir = directory(SF2_DIR / "clr")
+    log:
+        SELECTION_LOG_DIR / "run_sweepfinder_scan.log"
+    conda: "../envs/sweepfinder.yaml"
+    shell:
+        """
+        mkdir -p {output.clr_dir}
+        : > {log}
+
+        tail -n +2 {input.contigs} | while IFS=$'\\t' read -r contig length n_sites n_grid freq_file grid_file; do
+            safe=$(basename "$freq_file" .freq)
+            echo "Scanning $contig ($n_grid grid points, $n_sites polymorphic sites)" >> {log}
+            SweepFinder2 -lu "$grid_file" "$freq_file" {input.spectrum} {output.clr_dir}/${{safe}}.clr >> {log} 2>&1
+        done
+
+        echo "done" > {output.marker}
+        """
+
+
+rule call_sweep_regions:
+    """
+    Merge per-contig CLR outputs, call sweep-like regions, and plot Manhattan.
+    """
+    input:
+        contigs = SF2_DIR / "contigs.tsv",
+        marker = SF2_DIR / "scan_complete.txt",
+        clr_dir = SF2_DIR / "clr"
+    output:
+        clr_tsv = SF2_DIR / "sweepfinder_clr.tsv",
+        regions_bed = SF2_DIR / "sweep_regions.bed",
+        summary = SF2_DIR / "sweep_calling_summary.tsv",
+        plot_png = FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.png",
+        plot_pdf = FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.pdf"
+    params:
+        clr_percentile = SF2_CLR_PERCENTILE,
+        region_merge_gap = SF2_REGION_MERGE_GAP
+    log:
+        SELECTION_LOG_DIR / "call_sweep_regions.log"
+    conda: "../envs/sweepfinder.yaml"
+    shell:
+        """
+        mkdir -p {FIGURES_DIR}/snp_popgen {SELECTION_LOG_DIR}
+
+        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/call_sweep_regions.py \
+            --clr-dir {input.clr_dir} \
+            --contigs-tsv {input.contigs} \
+            --output-clr {output.clr_tsv} \
+            --output-regions {output.regions_bed} \
+            --output-summary {output.summary} \
+            --plot-png {output.plot_png} \
+            --plot-pdf {output.plot_pdf} \
+            --clr-percentile {params.clr_percentile} \
+            --region-merge-gap {params.region_merge_gap} \
+            > {log} 2>&1
+        """
+
+
+rule test_introner_sweep_enrichment:
+    """
+    Test fixed vs polymorphic Group 1 introner enrichment/depletion in
+    SweepFinder2 sweep regions vs non-introner introns and a permutation null.
+    """
+    input:
+        clr_tsv = SF2_DIR / "sweepfinder_clr.tsv",
+        regions_bed = SF2_DIR / "sweep_regions.bed",
+        contigs = SF2_DIR / "contigs.tsv",
+        introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        non_introner_matrix = RESULTS / "evolution" / "non_introner_introns" / "intron_genotype_matrix.tsv"
+    output:
+        region_overlap = SF2_DIR / "introner_sweep_region_overlap.tsv",
+        perlocus = SF2_DIR / "introner_sweep_perlocus.tsv",
+        summary = SF2_DIR / "introner_sweep_enrichment_summary.tsv",
+        enrichment_png = FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.png",
+        enrichment_pdf = FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.pdf",
+        clr_png = FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.png",
+        clr_pdf = FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.pdf"
+    params:
+        reference_sample = REFERENCE,
+        group1 = ",".join(GROUP1_SAMPLES),
+        group2 = ",".join(GROUP2_SAMPLES),
+        accepted_within_statuses = ",".join(SWEEP_ACCEPTED_WITHIN_STATUSES),
+        flank_size = SF2_FLANK_SIZE,
+        permutations = SF2_PERMUTATIONS,
+        seed = SF2_SEED,
+        mating_contig = lambda wildcards: f"{REFERENCE}#0#{config['mating_type_region']['scaffold']}",
+        mating_start = config["mating_type_region"]["start"],
+        mating_end = config["mating_type_region"]["end"]
+    log:
+        SELECTION_LOG_DIR / "test_introner_sweep_enrichment.log"
+    conda: "../envs/sweepfinder.yaml"
+    shell:
+        """
+        mkdir -p {FIGURES_DIR}/snp_popgen {SELECTION_LOG_DIR}
+
+        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/test_introner_sweep_enrichment.py \
+            --clr-tsv {input.clr_tsv} \
+            --sweep-regions {input.regions_bed} \
+            --contigs-tsv {input.contigs} \
+            --introner-matrix {input.introner_matrix} \
+            --non-introner-matrix {input.non_introner_matrix} \
+            --group1-samples {params.group1} \
+            --group2-samples {params.group2} \
+            --accepted-within-statuses {params.accepted_within_statuses} \
+            --reference-sample {params.reference_sample} \
+            --flank-size {params.flank_size} \
+            --mating-contig {params.mating_contig} \
+            --mating-start {params.mating_start} \
+            --mating-end {params.mating_end} \
+            --permutations {params.permutations} \
+            --seed {params.seed} \
+            --region-overlap-tsv {output.region_overlap} \
+            --perlocus-tsv {output.perlocus} \
+            --summary-tsv {output.summary} \
+            --plot-enrichment-png {output.enrichment_png} \
+            --plot-enrichment-pdf {output.enrichment_pdf} \
+            --plot-clr-png {output.clr_png} \
+            --plot-clr-pdf {output.clr_pdf} \
             > {log} 2>&1
         """
 
@@ -606,6 +910,41 @@ rule plot_recombination_boxplots:
         """
 
 
+rule plot_recombination_violin_categories:
+    """
+    Generate violin plots for selected pyrho recombination categories:
+    Population 1 exonic background, all introners, polymorphic introners,
+    Population 2 exonic background, and Population 2 all introners.
+    """
+    input:
+        group1_all_windows = RECOMB_DIR / "gene_exonic_introners_all_5kb_updated_windows.tsv",
+        group1_polymorphic_windows = RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated_windows.tsv",
+        group2_windows = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_windows.tsv",
+        color_guide = PROJECT_ROOT / "master_figure_color_guide.tsv",
+        script = PROJECT_ROOT / "scripts" / "popgen" / "recombination_analysis" / "plot_recombination_violin_categories.py"
+    output:
+        pdf = FIGURES_DIR / "snp_popgen" / "recombination_violin_categories.pdf",
+        png = FIGURES_DIR / "snp_popgen" / "recombination_violin_categories.png",
+        tsv = RECOMB_DIR / "recombination_violin_categories.tsv"
+    log:
+        SELECTION_LOG_DIR / "plot_recombination_violin_categories.log"
+    conda: "../envs/popgen.yaml"
+    shell:
+        """
+        mkdir -p {FIGURES_DIR}/snp_popgen {RECOMB_DIR}
+
+        python {input.script} \
+            --group1-all-windows {input.group1_all_windows} \
+            --group1-polymorphic-windows {input.group1_polymorphic_windows} \
+            --group2-windows {input.group2_windows} \
+            --output-pdf {output.pdf} \
+            --output-png {output.png} \
+            --output-tsv {output.tsv} \
+            --color-guide {input.color_guide} \
+            2> {log}
+        """
+
+
 # ============================================================
 # TARGET RULES
 # ============================================================
@@ -629,9 +968,16 @@ rule selection_complete:
         RECOMB_DIR / "gene_exonic_frequency_based_5kb_updated_summary.tsv",
         RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_summary.tsv",
         FIGURES_DIR / "snp_popgen" / "recombination_boxplots.pdf",
+        FIGURES_DIR / "snp_popgen" / "recombination_violin_categories.pdf",
         # SFS
         SFS_DIR / "afs_by_class.tsv",
         FIGURES_DIR / "snp_popgen" / "afs_by_class.pdf",
+        # SweepFinder2
+        SF2_DIR / "sweepfinder_clr.tsv",
+        SF2_DIR / "sweep_regions.bed",
+        SF2_DIR / "introner_sweep_enrichment_summary.tsv",
+        FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.png",
+        FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.png",
 
 
 rule basic_popgen_only:
@@ -671,7 +1017,8 @@ rule recombination_only:
         RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated_summary.tsv",
         RECOMB_DIR / "gene_exonic_frequency_based_5kb_updated_summary.tsv",
         RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_summary.tsv",
-        FIGURES_DIR / "snp_popgen" / "recombination_boxplots.pdf"
+        FIGURES_DIR / "snp_popgen" / "recombination_boxplots.pdf",
+        FIGURES_DIR / "snp_popgen" / "recombination_violin_categories.pdf"
 
 
 rule group1_introner_sweeps:
@@ -686,3 +1033,40 @@ rule group1_introner_sweeps:
         SWEEP_DIR / "introner_sweep_empirical_pvalues.tsv",
         FIGURES_DIR / "snp_popgen" / "group1_introner_sweep_summary.png",
         FIGURES_DIR / "snp_popgen" / "group1_introner_sweep_summary.pdf"
+
+
+rule fixed_snp_sweep_control:
+    """
+    Target: Fixed 4D SNP sweep-control screen only.
+    """
+    input:
+        FIXED_SNP_SWEEP_DIR / "fixed_snp_targets.tsv",
+        FIXED_SNP_SWEEP_DIR / "fixed_snp_targets.bed",
+        FIXED_SNP_SWEEP_DIR / "fixed_snp_windows.tsv",
+        FIXED_SNP_SWEEP_DIR / "fixed_snp_background_windows.tsv",
+        FIXED_SNP_SWEEP_DIR / "fixed_snp_sweep_empirical_pvalues.tsv",
+        FIGURES_DIR / "snp_popgen" / "fixed_snp_sweep_summary.png",
+        FIGURES_DIR / "snp_popgen" / "fixed_snp_sweep_summary.pdf"
+
+
+rule sweepfinder_sweeps:
+    """
+    Target: SweepFinder2 genome-wide CLR scan and introner enrichment test.
+    """
+    input:
+        SF2_DIR / "combined.freq",
+        SF2_DIR / "contigs.tsv",
+        SF2_DIR / "spectrum.out",
+        SF2_DIR / "scan_complete.txt",
+        SF2_DIR / "sweepfinder_clr.tsv",
+        SF2_DIR / "sweep_regions.bed",
+        SF2_DIR / "sweep_calling_summary.tsv",
+        SF2_DIR / "introner_sweep_region_overlap.tsv",
+        SF2_DIR / "introner_sweep_perlocus.tsv",
+        SF2_DIR / "introner_sweep_enrichment_summary.tsv",
+        FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.png",
+        FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.pdf",
+        FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.png",
+        FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.pdf",
+        FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.png",
+        FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.pdf"

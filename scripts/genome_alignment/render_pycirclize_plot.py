@@ -15,12 +15,21 @@ alignment links with ``circos.link``.
 
 import argparse
 import colorsys
-import csv
 import os
 import re
 import sys
 from collections import Counter, OrderedDict, defaultdict
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parent))
+
+from figure_color_guide import (
+    DEFAULT_GUIDE_PATH,
+    build_synteny_mirrored_chr_colors,
+    darken_hex,
+    load_color_guide,
+)
 
 BASE_COLORS = {
     "black": "#000000",
@@ -47,7 +56,12 @@ def parse_args():
     parser.add_argument("--strain2-introners", required=True, help="Strain2 introner histogram")
     parser.add_argument("--output-png", required=True, help="Output PNG path")
     parser.add_argument("--output-svg", default="", help="Optional output SVG path")
-    parser.add_argument("--palette-csv", default="", help="Optional CSV: chromosome,strain1,strain2")
+    parser.add_argument("--links", required=True, help="Synteny links TSV used for color mirroring")
+    parser.add_argument(
+        "--color-guide",
+        default=str(DEFAULT_GUIDE_PATH),
+        help="Master figure color guide TSV",
+    )
     parser.add_argument("--start", type=float, default=-358, help="Start angle")
     parser.add_argument("--end", type=float, default=2, help="End angle")
     parser.add_argument("--space", type=float, default=1.5, help="Space between sectors")
@@ -69,7 +83,7 @@ def parse_args():
     parser.add_argument("--right-label", default="", help="Right strain label")
     parser.add_argument("--chromosome-label-size", type=float, default=7.5)
     parser.add_argument("--strain-label-size", type=float, default=12.0)
-    parser.add_argument("--strain-label-y", type=float, default=0.9, help="Figure y-position for strain labels")
+    parser.add_argument("--strain-label-y", type=float, default=0.95, help="Figure y-position for strain labels")
     parser.add_argument("--tick-interval", type=int, default=500000)
     parser.add_argument(
         "--exclude-sectors",
@@ -134,38 +148,6 @@ def parse_color(value, alpha=None):
     return value
 
 
-def load_palette(path, strain1_name, strain2_name):
-    palette = {}
-    if not path:
-        return palette
-
-    with open(path, newline="") as handle:
-        reader = csv.DictReader(handle)
-        fieldnames = reader.fieldnames or []
-        normalized_fields = {field.strip().lower(): field for field in fieldnames}
-        required = {
-            "chromosome": "chromosome",
-            strain1_name.lower(): strain1_name,
-            strain2_name.lower(): strain2_name,
-        }
-        missing = [
-            display_name
-            for normalized_name, display_name in required.items()
-            if normalized_name not in normalized_fields
-        ]
-        if missing:
-            missing_text = ", ".join(sorted(missing))
-            sys.exit(f"Palette CSV is missing required column(s): {missing_text}")
-
-        for row in reader:
-            key = chromosome_key(row[normalized_fields["chromosome"]])
-            for strain in (strain1_name, strain2_name):
-                color = row.get(normalized_fields[strain.lower()], "").strip()
-                if color:
-                    palette[(strain, key)] = parse_color(color)
-    return palette
-
-
 def strain_for_chr_id(chr_id, strain1_name, strain2_name):
     if chr_id.startswith(strain1_name):
         return strain1_name
@@ -174,13 +156,8 @@ def strain_for_chr_id(chr_id, strain1_name, strain2_name):
     return None
 
 
-def load_karyotype(path, strain1_name, strain2_name, palette):
-    sectors = OrderedDict()
-    labels = {}
-    colors = {}
-    strains = {}
-    order_by_strain = defaultdict(int)
-
+def read_karyotype_entries(path, strain1_name, strain2_name):
+    entries = []
     with open(path) as handle:
         for line in handle:
             stripped = line.strip()
@@ -192,24 +169,33 @@ def load_karyotype(path, strain1_name, strain2_name, palette):
                 continue
 
             chr_id = parts[2]
-            label = parts[3]
-            start = int(float(parts[4]))
-            end = int(float(parts[5]))
-            color = parse_color(parts[6])
-            strain = strain_for_chr_id(chr_id, strain1_name, strain2_name)
-            if strain:
-                order_by_strain[strain] += 1
-                order_key = str(order_by_strain[strain])
-                label_key = chromosome_key(label)
-                color = palette.get((strain, order_key), palette.get((strain, label_key), color))
+            entries.append(
+                {
+                    "chr_id": chr_id,
+                    "label": parts[3],
+                    "size": int(float(parts[5])) - int(float(parts[4])),
+                    "strain": strain_for_chr_id(chr_id, strain1_name, strain2_name),
+                    "fallback_color": parts[6],
+                }
+            )
+    return entries
 
-            sectors[chr_id] = end - start
-            labels[chr_id] = label
-            colors[chr_id] = color
-            strains[chr_id] = strain
+
+def build_karyotype_from_entries(entries, chr_colors):
+    sectors = OrderedDict()
+    labels = {}
+    colors = {}
+    strains = {}
+
+    for entry in entries:
+        chr_id = entry["chr_id"]
+        sectors[chr_id] = entry["size"]
+        labels[chr_id] = entry["label"]
+        strains[chr_id] = entry["strain"]
+        colors[chr_id] = parse_color(chr_colors.get(chr_id, entry["fallback_color"]))
 
     if not sectors:
-        sys.exit(f"No chromosome entries found in {path}")
+        sys.exit("No chromosome entries found in karyotype")
 
     return sectors, labels, colors, strains
 
@@ -399,7 +385,7 @@ def add_ideograms(circos, labels, colors, tick_interval, label_size):
             )
 
 
-def add_links(circos, links, valid_sectors, sector_sizes, labels, strains, reverse_rcc_pairs, strain2_name, radius, alpha):
+def add_links(circos, links, valid_sectors, sector_sizes, labels, strains, reverse_rcc_pairs, strain2_name, radius, alpha, link_color):
     for region1, region2, color in links:
         if region1[0] not in valid_sectors or region2[0] not in valid_sectors:
             continue
@@ -412,7 +398,7 @@ def add_links(circos, links, valid_sectors, sector_sizes, labels, strains, rever
             reverse_rcc_pairs,
             strain2_name,
         )
-        circos.link(region1, region2, color=color, alpha=alpha, r1=radius, r2=radius, lw=0)
+        circos.link(region1, region2, color=link_color, alpha=alpha, r1=radius, r2=radius, lw=0)
 
 
 def saturate_color(color, multiplier):
@@ -509,13 +495,20 @@ def main():
     mpl_config_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(mpl_config_dir))
     Circos = import_pycirclize()
-    palette = load_palette(args.palette_csv, args.strain1_name, args.strain2_name)
-    sectors, labels, colors, strains = load_karyotype(
-        args.karyotype,
+    guide_colors = load_color_guide(args.color_guide)
+    entries = read_karyotype_entries(args.karyotype, args.strain1_name, args.strain2_name)
+    labels = {entry["chr_id"]: entry["label"] for entry in entries}
+    strains = {entry["chr_id"]: entry["strain"] for entry in entries}
+    mirrored_chr_colors = build_synteny_mirrored_chr_colors(
+        args.links,
+        [entry["chr_id"] for entry in entries],
+        labels,
+        strains,
         args.strain1_name,
         args.strain2_name,
-        palette,
+        guide=guide_colors,
     )
+    sectors, labels, colors, strains = build_karyotype_from_entries(entries, mirrored_chr_colors)
     sectors, labels, colors, strains = filter_excluded_sectors(
         sectors,
         labels,
@@ -540,23 +533,26 @@ def main():
     )
 
     add_ideograms(circos, labels, colors, args.tick_interval, args.chromosome_label_size)
+    intron_color = guide_colors["Intron"]
+    introner_color = guide_colors["Introner"]
+    link_color = guide_colors["Ideogram link"]
     plot_histogram_track(
         circos,
         sectors,
         load_histogram(args.strain1_introns) | load_histogram(args.strain2_introns),
-        (78, 86),
+        (70, 82),
         args.intron_max,
-        "#e74c3c",
-        "#b03a2e",
+        intron_color,
+        darken_hex(intron_color),
     )
     plot_histogram_track(
         circos,
         sectors,
         load_histogram(args.strain1_introners) | load_histogram(args.strain2_introners),
-        (86, 94),
+        (82, 94),
         args.introner_max,
-        "#3366cc",
-        "#1f3f7f",
+        introner_color,
+        darken_hex(introner_color),
     )
     links = load_links(args.ribbons)
     reverse_rcc_pairs = parse_reverse_rcc_link_pairs(args.reverse_rcc_link_pairs)
@@ -589,13 +585,14 @@ def main():
             args.strain2_name,
             args.link_radius,
             args.link_alpha,
+            link_color,
         )
 
     fig = circos.plotfig(figsize=(args.figsize, args.figsize))
     if args.left_label:
-        fig.text(0.025, args.strain_label_y, args.left_label, ha="left", va="center", fontsize=args.strain_label_size, weight="bold")
+        fig.text(0.075, args.strain_label_y, args.left_label, ha="left", va="center", fontsize=args.strain_label_size, weight="bold")
     if args.right_label:
-        fig.text(0.975, args.strain_label_y, args.right_label, ha="right", va="center", fontsize=args.strain_label_size, weight="bold")
+        fig.text(0.925, args.strain_label_y, args.right_label, ha="right", va="center", fontsize=args.strain_label_size, weight="bold")
 
     save_figure(fig, args.output_png, args.output_svg, args.dpi)
 

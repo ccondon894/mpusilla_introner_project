@@ -160,7 +160,7 @@ def plot_introner_family_distribution(df, outfile, group1_samples, group2_sample
         ax.set_ylim(bottom=0)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(top_families, rotation=45, ha='right', fontsize=12)
+    ax.set_xticklabels(top_families, rotation=0, ha='center', fontsize=12)
     ax.tick_params(labelsize=12)
 
     ax.grid(False)

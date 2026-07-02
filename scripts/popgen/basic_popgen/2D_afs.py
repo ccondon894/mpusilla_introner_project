@@ -82,19 +82,24 @@ def plot_2d_afs_heatmap(spectrum, output_pdf, output_png):
     # Log scale the counts, setting zeros to a small positive value to avoid log(0)
     log_spectrum = np.log10(spectrum + 1)  # Adding 1 to avoid log(0)
 
-    # Create the heatmap with a custom aspect ratio
-    plt.figure(figsize=(12, 4))
+    n_rows, n_cols = log_spectrum.shape
+    cell_size = 0.72
+    fig_width = n_cols * cell_size + 2.4
+    fig_height = n_rows * cell_size + 1.6
+
+    # Create the heatmap with square cells.
+    plt.figure(figsize=(fig_width, fig_height))
     ax = sns.heatmap(log_spectrum, annot=log_spectrum, fmt=".1f", cmap='viridis',
                      cbar_kws={'label': 'log10(count)'},
-                     linewidths=0.5, linecolor='white')
+                     linewidths=0.5, linecolor='white',
+                     square=True)
 
     # Add clean labels (no title for publication-quality)
     plt.xlabel("Population 1 4D Site Frequency", fontsize=13)
     plt.ylabel("Population 2 4D Site Frequency", fontsize=13)
     # plt.title("Folded 2D Allele Frequency Spectrum")
 
-    # Rotate x-axis labels 45 degrees for better readability
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right', fontsize=12)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=0, ha='center', fontsize=12)
     ax.set_yticklabels(ax.get_yticklabels(), fontsize=12)
     # Set y-axis to show values correctly (inverted to match typical AFS orientation)
     plt.gca().invert_yaxis()

@@ -589,6 +589,40 @@ rule introner_group_significant_go_cds_length_permutation:
         """
 
 
+rule plot_go_enrichment_dot_forest:
+    """
+    Plot a curated dot/forest panel of CDS-length-permutation-supported GO terms.
+    """
+    input:
+        empirical = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.tsv",
+        script = PROJECT_ROOT / "scripts" / "go_analysis" / "plot_go_enrichment_dot_forest.py"
+    output:
+        plot = FIGURES_DIR / "go_enrichment_dot_forest.png",
+        plotted_terms = GO_RESULTS_DIR / "go_enrichment_dot_forest.plotted_terms.tsv",
+        family1_plot = FIGURES_DIR / "go_enrichment_dot_forest.family1.png",
+        family1_plotted_terms = GO_RESULTS_DIR / "go_enrichment_dot_forest.family1.plotted_terms.tsv"
+    log:
+        GO_LOG_DIR / "plot_go_enrichment_dot_forest.log"
+    conda:
+        "../envs/go_enrichment.yaml"
+    shell:
+        """
+        mkdir -p {FIGURES_DIR}
+        mkdir -p {GO_RESULTS_DIR}
+        mkdir -p {GO_LOG_DIR}
+        mkdir -p {GO_LOG_DIR}/matplotlib
+
+        MPLCONFIGDIR={GO_LOG_DIR}/matplotlib \
+            python {input.script} \
+            --input {input.empirical} \
+            --output {output.plot} \
+            --plotted-data {output.plotted_terms} \
+            --family1-output {output.family1_plot} \
+            --family1-plotted-data {output.family1_plotted_terms} \
+            2> {log}
+        """
+
+
 rule summarize_introner_group_unique_go_terms:
     """
     Identify empirically supported subgroup GO terms not captured by all_introners.
@@ -634,7 +668,8 @@ rule summarize_introner_group_unique_go_terms:
 
 rule go_enrichment_complete:
     """
-    Target: Complete current GO enrichment analysis pipeline.
+    Target: Complete current GO enrichment analysis pipeline, including
+    CDS-length-weighted permutation tests.
 
     Uses the final genotype matrix and the biologically defined introner groups:
     all_introners, ancestral, independent_insertion, polymorphic_within_group1,
@@ -653,8 +688,21 @@ rule go_enrichment_complete:
         GO_RESULTS_DIR / "introner_group_go_slim_enrichment.tsv",
         GO_RESULTS_DIR / "introner_group_go_slim_enrichment.significant.tsv",
         GO_RESULTS_DIR / "introner_group_go_slim_enrichment.summary.txt",
+        # CDS-length-weighted permutation tests
+        GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.tsv",
+        GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.significant.tsv",
+        GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.fisher_significant_with_empirical.tsv",
+        GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.summary.txt",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.empirical_significant.tsv",
+        GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.summary.txt",
+        # Figures
         FIGURES_DIR / "go_enrichment_heatmap.pdf",
-        FIGURES_DIR / "go_enrichment_top_terms.pdf"
+        FIGURES_DIR / "go_enrichment_top_terms.pdf",
+        FIGURES_DIR / "go_enrichment_dot_forest.png",
+        GO_RESULTS_DIR / "go_enrichment_dot_forest.plotted_terms.tsv",
+        FIGURES_DIR / "go_enrichment_dot_forest.family1.png",
+        GO_RESULTS_DIR / "go_enrichment_dot_forest.family1.plotted_terms.tsv"
 
 
 rule go_mapping_only:

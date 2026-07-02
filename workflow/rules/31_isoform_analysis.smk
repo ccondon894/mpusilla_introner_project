@@ -31,6 +31,23 @@ EXPRESSION_LOG_DIR = EXPRESSION_DIR / "logs"
 # SQANTI3 output directory
 SQANTI_DIR = EXPRESSION_DIR / "sqanti3"
 
+# Representative genes for the introner gene/transcript-structure track figure.
+ISOFORM_TRACK_GENES = config.get(
+    "isoform_track_genes",
+    [
+        "MicpuC2.est_orfs.13_5950_4275896:1.3.0.228",
+        "estExt_Genewise1Plus.C_3_t40031.3.0.228",
+    ],
+)
+ISOFORM_TRACK_PDFS = expand(
+    FIGURES_DIR / "introner_isoform_tracks" / "{gene}.isoform_model_tracks.pdf",
+    gene=ISOFORM_TRACK_GENES,
+)
+ISOFORM_TRACK_PNGS = expand(
+    FIGURES_DIR / "introner_isoform_tracks" / "{gene}.isoform_model_tracks.png",
+    gene=ISOFORM_TRACK_GENES,
+)
+
 # Mating type region to exclude
 MT_SCAFFOLD = config["mating_type_region"]["scaffold"]
 MT_START = config["mating_type_region"]["start"]
@@ -373,6 +390,50 @@ rule plot_introner_isoform_raincloud:
         """
 
 
+rule plot_introner_isoform_tracks:
+    """
+    Render representative sample-aligned gene model and R2C2 isoform tracks.
+    """
+    input:
+        genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        introner_intron_table = PROJECT_ROOT / "analysis" / "ccmp1545_gtf_liftover_test" / "current_genotype_introner_vs_annotated_intron_size.tsv",
+        ccmp1545_gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
+        rcc1614_gtf = ANNOTATIONS_DIR / "RCC1614.gtf",
+        rcc1749_gtf = ANNOTATIONS_DIR / "RCC1749.gtf",
+        sqanti_data = SQANTI_DIR / "parsed_sqanti3_data.tsv",
+        script = PROJECT_ROOT / "scripts" / "expression" / "isoform_analysis" / "plot_introner_isoform_tracks.py"
+    output:
+        pdf = FIGURES_DIR / "introner_isoform_tracks" / "{gene}.isoform_model_tracks.pdf",
+        png = FIGURES_DIR / "introner_isoform_tracks" / "{gene}.isoform_model_tracks.png"
+    log:
+        EXPRESSION_LOG_DIR / "introner_isoform_tracks" / "{gene}.log"
+    conda: "../envs/isoform_analysis.yaml"
+    shell:
+        """
+        mkdir -p $(dirname {output.pdf})
+        mkdir -p $(dirname {log})
+
+        python {input.script} \
+            --gene '{wildcards.gene}' \
+            --genotype-matrix {input.genotype_matrix} \
+            --annotation-dir {ANNOTATIONS_DIR} \
+            --introner-intron-table {input.introner_intron_table} \
+            --outdir $(dirname {output.pdf}) \
+            --output-prefix '{wildcards.gene}.isoform_model_tracks' \
+            --format both \
+            > {log} 2>&1
+        """
+
+
+rule isoform_track_figures:
+    """
+    Target: Representative introner gene/transcript-structure track figures.
+    """
+    input:
+        ISOFORM_TRACK_PDFS,
+        ISOFORM_TRACK_PNGS
+
+
 # ============================================================
 # TARGET RULES
 # ============================================================
@@ -389,7 +450,9 @@ rule isoform_analysis_complete:
         ISOFORM_DIR / "introner_isoform_expression_raincloud_stats.txt",
         FIGURES_DIR / "shannon_diversity_distribution.pdf",
         FIGURES_DIR / "nmd_introner_association.pdf",
-        FIGURES_DIR / "introner_isoform_expression_raincloud.pdf"
+        FIGURES_DIR / "introner_isoform_expression_raincloud.pdf",
+        ISOFORM_TRACK_PDFS,
+        ISOFORM_TRACK_PNGS
 
 
 rule shannon_diversity_only:

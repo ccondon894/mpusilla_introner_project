@@ -94,6 +94,14 @@ RF_PREINSERTION_SUMMARY = (
     / f"rcc1749_preinsertion_sequence_features.mask{RF_MASK}.orientnorm.exclude28.summary.tsv"
 )
 
+GENE_GROUPED_CV_DIR = (
+    RF_MODELS_DIR
+    / f"{RF_TRAIN_SAMPLE.lower()}_present_absent_mask{RF_MASK}_gene_grouped_cv"
+)
+TEST_GENE_GROUPED_CV_DIR = (
+    RF_MODELS_DIR
+    / f"{RF_TEST_SAMPLE.lower()}_present_absent_mask{RF_MASK}_gene_grouped_cv"
+)
 LOFO_OUTPUT_DIR = (
     RF_MODELS_DIR
     / f"leave_one_family_out_{RF_TRAIN_SAMPLE.lower()}_present_absent_mask{RF_MASK}_same_gene_negatives"
@@ -113,6 +121,18 @@ MATCHED_CONTROLS_DIR = (
 KMER_PERMUTATION_DIR = (
     RF_MODELS_DIR
     / f"{RF_TRAIN_SAMPLE.lower()}_train_{RF_TEST_SAMPLE.lower()}_preinsertion_same_gene_gc_kmer_group_permutation"
+)
+TRAIN_PA_KMER_PERMUTATION_DIR = (
+    RF_MODELS_DIR
+    / f"{RF_TRAIN_SAMPLE.lower()}_present_absent_mask{RF_MASK}_kmer_group_permutation"
+)
+TEST_PA_KMER_PERMUTATION_DIR = (
+    RF_MODELS_DIR
+    / f"{RF_TEST_SAMPLE.lower()}_present_absent_mask{RF_MASK}_kmer_group_permutation"
+)
+PA_KMER_PERMUTATION_COMPARISON = (
+    RF_MODELS_DIR
+    / "present_absent_kmer_permutation_comparison.tsv"
 )
 
 
@@ -489,6 +509,80 @@ rule rf_leave_one_family_out:
         """
 
 
+rule rf_present_absent_gene_grouped_cv:
+    """
+    Gene-grouped CV for the training-sample present/absent RF feature panel.
+    """
+    input:
+        matrix = rf_enriched_matrix(RF_TRAIN_SAMPLE),
+    output:
+        comparison = GENE_GROUPED_CV_DIR / "comparison.tsv",
+        deltas = GENE_GROUPED_CV_DIR / "feature_set_deltas.tsv",
+        metrics = GENE_GROUPED_CV_DIR / "metrics.tsv",
+        predictions = GENE_GROUPED_CV_DIR / "predictions.tsv",
+        features = GENE_GROUPED_CV_DIR / "features.tsv",
+        balanced = GENE_GROUPED_CV_DIR / "balanced_dataset.tsv",
+    log:
+        RF_LOG_DIR / "present_absent_gene_grouped_cv.log",
+    params:
+        feature_sets = rf_feature_sets_csv("within_sample"),
+        n_splits = RF_MODELING.get("gene_grouped_cv_splits", 5),
+    conda: "../envs/random_forest.yaml"
+    shell:
+        """
+        mkdir -p {GENE_GROUPED_CV_DIR} {RF_LOG_DIR}
+        export PYTHONPATH={RF_SCRIPTS}:${{PYTHONPATH:-}}
+
+        python {RF_SCRIPTS}/run_present_absent_gene_grouped_cv.py \
+            --matrix {input.matrix} \
+            --windows {RF_WINDOWS_STR} \
+            --feature-sets {params.feature_sets} \
+            --group-col group_id \
+            --n-splits {params.n_splits} \
+            --n-estimators {RF_MODELING[n_estimators]} \
+            --random-state {RF_MODELING[random_state]} \
+            --output-dir {GENE_GROUPED_CV_DIR} \
+            > {log} 2>&1
+        """
+
+
+rule rf_test_present_absent_gene_grouped_cv:
+    """
+    Gene-grouped CV for the test-sample present/absent RF feature panel.
+    """
+    input:
+        matrix = rf_enriched_matrix(RF_TEST_SAMPLE),
+    output:
+        comparison = TEST_GENE_GROUPED_CV_DIR / "comparison.tsv",
+        deltas = TEST_GENE_GROUPED_CV_DIR / "feature_set_deltas.tsv",
+        metrics = TEST_GENE_GROUPED_CV_DIR / "metrics.tsv",
+        predictions = TEST_GENE_GROUPED_CV_DIR / "predictions.tsv",
+        features = TEST_GENE_GROUPED_CV_DIR / "features.tsv",
+        balanced = TEST_GENE_GROUPED_CV_DIR / "balanced_dataset.tsv",
+    log:
+        RF_LOG_DIR / "test_present_absent_gene_grouped_cv.log",
+    params:
+        feature_sets = rf_feature_sets_csv("within_sample"),
+        n_splits = RF_MODELING.get("gene_grouped_cv_splits", 5),
+    conda: "../envs/random_forest.yaml"
+    shell:
+        """
+        mkdir -p {TEST_GENE_GROUPED_CV_DIR} {RF_LOG_DIR}
+        export PYTHONPATH={RF_SCRIPTS}:${{PYTHONPATH:-}}
+
+        python {RF_SCRIPTS}/run_present_absent_gene_grouped_cv.py \
+            --matrix {input.matrix} \
+            --windows {RF_WINDOWS_STR} \
+            --feature-sets {params.feature_sets} \
+            --group-col group_id \
+            --n-splits {params.n_splits} \
+            --n-estimators {RF_MODELING[n_estimators]} \
+            --random-state {RF_MODELING[random_state]} \
+            --output-dir {TEST_GENE_GROUPED_CV_DIR} \
+            > {log} 2>&1
+        """
+
+
 rule rf_cross_sample_present_absent:
     """
     Train on CCMP1545 present/absent; evaluate on RCC1749 present/absent.
@@ -500,6 +594,7 @@ rule rf_cross_sample_present_absent:
         summary = f"{CROSS_SAMPLE_PA_PREFIX}.summary.tsv",
         predictions = f"{CROSS_SAMPLE_PA_PREFIX}.predictions.tsv",
         features = f"{CROSS_SAMPLE_PA_PREFIX}.features.tsv",
+        deltas = f"{CROSS_SAMPLE_PA_PREFIX}.feature_set_deltas.tsv",
     log:
         RF_LOG_DIR / "cross_sample_present_absent.log",
     params:
@@ -618,6 +713,7 @@ rule rf_cross_sample_kmer_group_permutation:
         baseline_predictions = KMER_PERMUTATION_DIR / "baseline_predictions.tsv",
     log:
         RF_LOG_DIR / "cross_sample_kmer_permutation.log",
+    threads: RF_MODELING.get("kmer_permutation_threads", 1)
     conda: "../envs/random_forest.yaml"
     shell:
         """
@@ -631,8 +727,112 @@ rule rf_cross_sample_kmer_group_permutation:
             --grouping kmer \
             --n-repeats {RF_MODELING[kmer_permutation_repeats]} \
             --n-estimators {RF_MODELING[n_estimators]} \
+            --n-jobs {threads} \
             --random-state {RF_MODELING[random_state]} \
             --output-dir {KMER_PERMUTATION_DIR} \
+            > {log} 2>&1
+        """
+
+
+rule rf_ccmp1545_present_absent_kmer_permutation:
+    """
+    Gene-grouped CV k-mer permutation importance for CCMP1545 present/absent loci.
+    """
+    input:
+        matrix = rf_enriched_matrix(RF_TRAIN_SAMPLE),
+    output:
+        baseline = TRAIN_PA_KMER_PERMUTATION_DIR / "baseline.tsv",
+        importance = TRAIN_PA_KMER_PERMUTATION_DIR / "kmer_permutation_importance.tsv",
+        importance_by_fold_repeat = TRAIN_PA_KMER_PERMUTATION_DIR / "kmer_permutation_importance_by_fold_repeat.tsv",
+        feature_groups = TRAIN_PA_KMER_PERMUTATION_DIR / "feature_groups.tsv",
+        baseline_predictions = TRAIN_PA_KMER_PERMUTATION_DIR / "baseline_predictions.tsv",
+    log:
+        RF_LOG_DIR / "ccmp1545_present_absent_kmer_permutation.log",
+    params:
+        n_splits = RF_MODELING.get("gene_grouped_cv_splits", 5),
+    threads: RF_MODELING.get("kmer_permutation_threads", 1)
+    conda: "../envs/random_forest.yaml"
+    shell:
+        """
+        mkdir -p {TRAIN_PA_KMER_PERMUTATION_DIR} {RF_LOG_DIR}
+        export PYTHONPATH={RF_SCRIPTS}:${{PYTHONPATH:-}}
+
+        python {RF_SCRIPTS}/run_present_absent_kmer_group_permutation_cv.py \
+            --matrix {input.matrix} \
+            --windows {RF_WINDOWS_STR} \
+            --feature-set kmer_left_right \
+            --group-col group_id \
+            --panel balanced \
+            --n-splits {params.n_splits} \
+            --n-repeats {RF_MODELING[kmer_permutation_repeats]} \
+            --n-estimators {RF_MODELING[n_estimators]} \
+            --n-jobs {threads} \
+            --random-state {RF_MODELING[random_state]} \
+            --output-dir {TRAIN_PA_KMER_PERMUTATION_DIR} \
+            > {log} 2>&1
+        """
+
+
+rule rf_rcc1749_present_absent_kmer_permutation:
+    """
+    Gene-grouped CV k-mer permutation importance for RCC1749 present/absent loci.
+    """
+    input:
+        matrix = rf_enriched_matrix(RF_TEST_SAMPLE),
+    output:
+        baseline = TEST_PA_KMER_PERMUTATION_DIR / "baseline.tsv",
+        importance = TEST_PA_KMER_PERMUTATION_DIR / "kmer_permutation_importance.tsv",
+        importance_by_fold_repeat = TEST_PA_KMER_PERMUTATION_DIR / "kmer_permutation_importance_by_fold_repeat.tsv",
+        feature_groups = TEST_PA_KMER_PERMUTATION_DIR / "feature_groups.tsv",
+        baseline_predictions = TEST_PA_KMER_PERMUTATION_DIR / "baseline_predictions.tsv",
+    log:
+        RF_LOG_DIR / "rcc1749_present_absent_kmer_permutation.log",
+    params:
+        n_splits = RF_MODELING.get("gene_grouped_cv_splits", 5),
+    threads: RF_MODELING.get("kmer_permutation_threads", 1)
+    conda: "../envs/random_forest.yaml"
+    shell:
+        """
+        mkdir -p {TEST_PA_KMER_PERMUTATION_DIR} {RF_LOG_DIR}
+        export PYTHONPATH={RF_SCRIPTS}:${{PYTHONPATH:-}}
+
+        python {RF_SCRIPTS}/run_present_absent_kmer_group_permutation_cv.py \
+            --matrix {input.matrix} \
+            --windows {RF_WINDOWS_STR} \
+            --feature-set kmer_left_right \
+            --group-col group_id \
+            --panel balanced \
+            --n-splits {params.n_splits} \
+            --n-repeats {RF_MODELING[kmer_permutation_repeats]} \
+            --n-estimators {RF_MODELING[n_estimators]} \
+            --n-jobs {threads} \
+            --random-state {RF_MODELING[random_state]} \
+            --output-dir {TEST_PA_KMER_PERMUTATION_DIR} \
+            > {log} 2>&1
+        """
+
+
+rule rf_compare_present_absent_kmer_permutation:
+    """
+    Compare present/absent k-mer permutation importance between CCMP1545 and RCC1749.
+    """
+    input:
+        ccmp1545 = TRAIN_PA_KMER_PERMUTATION_DIR / "kmer_permutation_importance.tsv",
+        rcc1749 = TEST_PA_KMER_PERMUTATION_DIR / "kmer_permutation_importance.tsv",
+    output:
+        comparison = PA_KMER_PERMUTATION_COMPARISON,
+    log:
+        RF_LOG_DIR / "compare_present_absent_kmer_permutation.log",
+    conda: "../envs/random_forest.yaml"
+    shell:
+        """
+        mkdir -p {RF_MODELS_DIR} {RF_LOG_DIR}
+        export PYTHONPATH={RF_SCRIPTS}:${{PYTHONPATH:-}}
+
+        python {RF_SCRIPTS}/compare_present_absent_kmer_importance.py \
+            --ccmp1545-importance {input.ccmp1545} \
+            --rcc1749-importance {input.rcc1749} \
+            --output {output.comparison} \
             > {log} 2>&1
         """
 
@@ -649,8 +849,14 @@ rule random_forest_all:
         rf_enriched_matrix(RF_TRAIN_SAMPLE),
         rf_enriched_matrix(RF_TEST_SAMPLE),
         RF_PREINSERTION_MATRIX,
+        GENE_GROUPED_CV_DIR / "comparison.tsv",
+        GENE_GROUPED_CV_DIR / "feature_set_deltas.tsv",
+        TEST_GENE_GROUPED_CV_DIR / "comparison.tsv",
+        TEST_GENE_GROUPED_CV_DIR / "feature_set_deltas.tsv",
         LOFO_OUTPUT_DIR / "summary.tsv",
         f"{CROSS_SAMPLE_PA_PREFIX}.summary.tsv",
+        f"{CROSS_SAMPLE_PA_PREFIX}.feature_set_deltas.tsv",
         PREINSERTION_SCORING_DIR / "summary.tsv",
         MATCHED_CONTROLS_DIR / "summary.tsv",
         KMER_PERMUTATION_DIR / "kmer_permutation_importance.tsv",
+        PA_KMER_PERMUTATION_COMPARISON,

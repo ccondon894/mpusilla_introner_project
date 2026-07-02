@@ -174,27 +174,24 @@ rule filter_reorder_karyotype:
 rule format_circos_karyotype:
     """Strip strain prefixes from chromosome labels and optionally apply palette colors."""
     input:
-        kar = CIRCOS_DIR / f"{G1}_vs_{G2}_reordered_flipped_filtered.raw.kar"
+        kar = CIRCOS_DIR / f"{G1}_vs_{G2}_reordered_flipped_filtered.raw.kar",
+        links = CIRCOS_DIR / f"{G1}_vs_{G2}.links.tsv"
     output:
         kar = CIRCOS_DIR / f"{G1}_vs_{G2}_reordered_flipped_filtered.kar",
         colors = CIRCOS_DIR / "circos_palette_colors.conf"
     params:
-        palette_csv = CIRCOS_PARAMS.get("palette_csv", "")
+        color_guide = CIRCOS_PARAMS.get("color_guide", "master_figure_color_guide.tsv")
     conda: "../envs/genome_alignment_circos.yaml"
     shell:
         """
-        palette_arg=""
-        if [ -n "{params.palette_csv}" ]; then
-            palette_arg="--palette-csv {params.palette_csv}"
-        fi
-
         python3 {GA_SCRIPTS}/format_circos_karyotype.py \
             --input {input.kar} \
+            --links {input.links} \
             --output {output.kar} \
             --colors-output {output.colors} \
             --strain1-name {G1} \
             --strain2-name {G2} \
-            $palette_arg
+            --color-guide {params.color_guide}
         """
 
 rule generate_ribbons:
@@ -323,6 +320,7 @@ rule render_pycirclize_circos:
     input:
         karyotype = CIRCOS_DIR / f"{G1}_vs_{G2}_reordered_flipped_filtered.kar",
         ribbons = CIRCOS_DIR / f"{G1}_vs_{G2}_ribbons_with_merging.tsv",
+        links = CIRCOS_DIR / f"{G1}_vs_{G2}.links.tsv",
         g1_introns = rules.generate_circos_histograms.output.g1_introns,
         g2_introns = rules.generate_circos_histograms.output.g2_introns,
         g1_introners = rules.generate_circos_histograms.output.g1_introners,
@@ -331,7 +329,7 @@ rule render_pycirclize_circos:
         png = CIRCOS_DIR / "circos.pycirclize.png",
         svg = CIRCOS_DIR / "circos.pycirclize.svg"
     params:
-        palette_csv = CIRCOS_PARAMS.get("palette_csv", ""),
+        color_guide = CIRCOS_PARAMS.get("color_guide", "master_figure_color_guide.tsv"),
         left_label = G2,
         right_label = G1,
         figsize = CIRCOS_PARAMS.get("pycirclize_figsize", 10),
@@ -352,14 +350,10 @@ rule render_pycirclize_circos:
     conda: "../envs/genome_alignment_circos.yaml"
     shell:
         """
-        palette_arg=""
-        if [ -n "{params.palette_csv}" ]; then
-            palette_arg="--palette-csv {params.palette_csv}"
-        fi
-
         python3 {GA_SCRIPTS}/render_pycirclize_plot.py \
             --karyotype {input.karyotype} \
             --ribbons {input.ribbons} \
+            --links {input.links} \
             --strain1-name {G1} \
             --strain2-name {G2} \
             --strain1-introns {input.g1_introns} \
@@ -385,5 +379,5 @@ rule render_pycirclize_circos:
             --tick-interval {params.tick_interval} \
             --exclude-sectors "{params.exclude_sectors}" \
             --reverse-rcc-link-pairs "{params.reverse_rcc_link_pairs}" \
-            $palette_arg
+            --color-guide {params.color_guide}
         """

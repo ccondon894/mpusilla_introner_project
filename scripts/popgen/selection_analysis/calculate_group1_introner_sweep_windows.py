@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pvalues", required=True)
     parser.add_argument("--plot-png", required=True)
     parser.add_argument("--plot-pdf", required=True)
+    parser.add_argument("--focal-label", default="introner", help="Label for focal windows in summary plots.")
     return parser.parse_args()
 
 
@@ -413,7 +414,14 @@ def compute_pvalues(focal_windows: pd.DataFrame, matched_backgrounds: pd.DataFra
     return pvalues
 
 
-def plot_summary(focal: pd.DataFrame, background: pd.DataFrame, pvalues: pd.DataFrame, png: str, pdf: str) -> None:
+def plot_summary(
+    focal: pd.DataFrame,
+    background: pd.DataFrame,
+    pvalues: pd.DataFrame,
+    png: str,
+    pdf: str,
+    focal_label: str,
+) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
     metrics = [
         ("pi_per_site", "Nucleotide diversity per site"),
@@ -431,7 +439,7 @@ def plot_summary(focal: pd.DataFrame, background: pd.DataFrame, pvalues: pd.Data
             bvals = pd.to_numeric(background[background["window_size"] == window_size][metric], errors="coerce").dropna()
             if not fvals.empty:
                 data.append(fvals)
-                labels.append(f"{window_size // 1000}kb focal")
+                labels.append(f"{window_size // 1000}kb {focal_label}")
             if not bvals.empty:
                 data.append(bvals.sample(min(len(bvals), 5000), random_state=42) if len(bvals) > 5000 else bvals)
                 labels.append(f"{window_size // 1000}kb bg")
@@ -449,7 +457,7 @@ def plot_summary(focal: pd.DataFrame, background: pd.DataFrame, pvalues: pd.Data
             ax.text(row.target_midpoint, row.composite_sweep_score, str(row.ortholog_id), fontsize=7)
     ax.set_xlabel("CCMP1545 coordinate")
     ax.set_ylabel("Composite sweep score")
-    ax.set_title("Top candidate introner windows")
+    ax.set_title(f"Top candidate {focal_label} windows")
     fig.tight_layout()
     fig.savefig(png, dpi=250)
     fig.savefig(pdf)
@@ -483,7 +491,7 @@ def main() -> None:
     focal_windows.to_csv(args.introner_windows, sep="\t", index=False)
     matched_backgrounds.to_csv(args.background_windows, sep="\t", index=False)
     pvalues.to_csv(args.pvalues, sep="\t", index=False)
-    plot_summary(focal_windows, matched_backgrounds, pvalues, args.plot_png, args.plot_pdf)
+    plot_summary(focal_windows, matched_backgrounds, pvalues, args.plot_png, args.plot_pdf, args.focal_label)
 
     print(f"Wrote {len(focal_windows)} focal windows")
     print(f"Wrote {len(matched_backgrounds)} matched background windows")

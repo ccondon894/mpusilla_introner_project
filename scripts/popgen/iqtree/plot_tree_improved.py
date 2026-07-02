@@ -2,279 +2,290 @@
 """
 Publication-quality phylogenetic tree visualization using toytree.
 
-This script creates professional, publication-ready phylogenetic tree visualizations
-with color-coded sample groups, clean typography, and multiple export formats.
-
-Features:
-- Color-coded tip labels (Group 1 = Blue, Group 2 = Red)
-- Professional typography (Arial/Helvetica)
-- Clean, minimal styling with thin branches
-- Professional scale bar
-- Legend showing group membership
-- Multiple export formats (PDF, PNG, SVG)
-- Command-line customization options
-
-Author: Generated for M. pusilla phylogenetic analysis
-Date: 2026-01-12
+Colors branches and tip labels by population (from master_figure_color_guide.tsv),
+and adds group labels, legend, and a labeled scale bar.
 """
 
-import toytree
-import toyplot
-import toyplot.pdf
-import toyplot.svg
-import toyplot.png
+from __future__ import annotations
+
 import argparse
 import sys
+from pathlib import Path
+
+import toytree
+import toyplot.pdf
+import toyplot.png
+import toyplot.svg
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from figure_color_guide import DEFAULT_GUIDE_PATH, get_color, load_color_guide
+
+GROUP2_SAMPLES = {"RCC1749", "RCC3052"}
+REFERENCE_SAMPLE = "CCMP1545"
+
+LAYOUT_NAMES = {
+    "r": "rectangular",
+    "c": "circular",
+}
 
 
-def plot_phylogenetic_tree_toytree(treefile, output_prefix="phylogenetic_tree_improved",
-                                   width=900, height=600, tip_font_size=15,
-                                   layout='r'):
-    """
-    Create publication-quality phylogenetic tree using toytree.
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Create publication-quality phylogenetic tree visualization using toytree",
+    )
+    parser.add_argument(
+        "-i",
+        "--input",
+        default="rerooted_tree.treefile",
+        help="Input tree file (Newick format)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default="phylogenetic_tree_improved",
+        help="Output file prefix (without extension)",
+    )
+    parser.add_argument(
+        "--color-guide",
+        default=str(DEFAULT_GUIDE_PATH),
+        help="Master figure color guide TSV",
+    )
+    parser.add_argument("--width", type=int, default=720, help="Canvas width in pixels")
+    parser.add_argument("--height", type=int, default=380, help="Canvas height in pixels")
+    parser.add_argument(
+        "--layout",
+        choices=["rectangular", "circular"],
+        default="rectangular",
+        help="Tree layout style",
+    )
+    parser.add_argument("--tip-font-size", type=int, default=14, help="Tip label font size")
+    parser.add_argument(
+        "--reference-sample",
+        default=REFERENCE_SAMPLE,
+        help="Reference sample highlighted in tip labels",
+    )
+    parser.add_argument(
+        "--info-only",
+        action="store_true",
+        help="Only print tree information, do not create plots",
+    )
+    return parser.parse_args()
 
-    Parameters:
-    -----------
-    treefile : str
-        Path to Newick format tree file
-    output_prefix : str
-        Output filename prefix (without extension)
-    width : int
-        Canvas width in pixels
-    height : int
-        Canvas height in pixels
-    tip_font_size : int
-        Font size for tip labels
-    layout : str
-        Tree layout ('r' for rectangular, 'c' for circular)
 
-    Returns:
-    --------
-    tree : toytree.tree
-        The loaded tree object
-    """
-
-    print(f"📊 Loading tree from: {treefile}")
-
+def load_tree(treefile):
     try:
-        # Load tree
-        tree = toytree.tree(treefile)
-    except Exception as e:
-        print(f"❌ Error loading tree: {e}")
-        sys.exit(1)
+        return toytree.tree(treefile)
+    except Exception as exc:
+        raise SystemExit(f"Error loading tree {treefile}: {exc}") from exc
 
-    # Define sample groups
-    group2_samples = {'RCC1749', 'RCC3052'}
-    tip_labels = tree.get_tip_labels()
 
-    print(f"   Found {len(tip_labels)} samples")
-    print(f"   Group 1 (Intronerful): {len([t for t in tip_labels if t not in group2_samples])} samples")
-    print(f"   Group 2 (Intronerless): {len([t for t in tip_labels if t in group2_samples])} samples")
+def node_descendant_tips(tree):
+    tips_by_node = {}
+    for node in tree.treenode.traverse("postorder"):
+        if node.is_leaf():
+            tips_by_node[node.idx] = {node.name}
+        else:
+            tips_by_node[node.idx] = set().union(
+                *(tips_by_node[child.idx] for child in node.children)
+            )
+    return tips_by_node
 
-    # Create color mapping for tip labels
-    tip_colors = []
+
+def population_edge_colors(tree, tips_by_node, group2_samples, pop1_color, pop2_color):
+    colors = []
+    for idx in range(tree.nnodes):
+        tips = tips_by_node.get(idx, set())
+        if not tips:
+            colors.append("#CCCCCC")
+        elif tips.issubset(group2_samples):
+            colors.append(pop2_color)
+        else:
+            colors.append(pop1_color)
+    return colors
+
+
+def tip_display_and_colors(tip_labels, group2_samples, reference_sample, guide):
+    pop1 = get_color("Population 1", guide)
+    pop1_dark = get_color("Population 1 dark", guide)
+    pop2 = get_color("Population 2", guide)
+
+    display_labels = []
+    colors = []
     for tip in tip_labels:
         if tip in group2_samples:
-            tip_colors.append('#E74C3C')  # Red for Group 2
+            display_labels.append(tip)
+            colors.append(pop2)
         else:
-            tip_colors.append('#3498DB')  # Blue for Group 1
+            display_labels.append(tip)
+            colors.append(pop1)
+    return display_labels, colors, pop1, pop2
 
-    print(f"\n🎨 Creating {layout_names[layout]} tree visualization...")
 
-    # Draw tree with custom styling using toytree v3 API
+def add_group_labels(axes, mark, tree, group2_samples, pop1_color, pop2_color):
+    ntable = mark.ntable
+    xmin = float(min(row[0] for row in ntable))
+    label_x = xmin - 0.045
+
+    tip_labels = tree.get_tip_labels()
+    group2_indices = [idx for idx, tip in enumerate(tip_labels) if tip in group2_samples]
+    group1_indices = [idx for idx, tip in enumerate(tip_labels) if tip not in group2_samples]
+
+    def y_range(indices):
+        ys = [float(ntable[idx][1]) for idx in indices]
+        return min(ys), max(ys)
+
+    g2_y0, g2_y1 = y_range(group2_indices)
+    g1_y0, g1_y1 = y_range(group1_indices)
+
+
+def add_legend(axes, mark, pop1_color, pop2_color):
+    ntable = mark.ntable
+    xmin = float(min(row[0] for row in ntable))
+    ymax = float(max(row[1] for row in ntable))
+    lx = xmin - 0.01
+    ly = ymax + 0.3
+
+    entries = [
+        (pop1_color, "Population 1"),
+        (pop2_color, "Population 2"),
+    ]
+    for offset, (color, label) in enumerate(entries):
+        y = ly - (offset * 0.55)
+        axes.text(lx, y, "●", style={"fill": color, "font-size": "13px"})
+        axes.text(
+            lx + 0.012,
+            y,
+            label,
+            style={"fill": "#333333", "font-size": "12px", "text-anchor": "start"},
+        )
+
+
+def plot_phylogenetic_tree(
+    treefile,
+    output_prefix,
+    color_guide_path,
+    width=520,
+    height=380,
+    layout="r",
+    tip_font_size=14,
+    reference_sample=REFERENCE_SAMPLE,
+):
+    guide = load_color_guide(color_guide_path)
+    tree = load_tree(treefile)
+    tip_labels = tree.get_tip_labels()
+    tips_by_node = node_descendant_tips(tree)
+
+    display_tips, tip_colors, pop1_color, pop2_color = tip_display_and_colors(
+        tip_labels,
+        GROUP2_SAMPLES,
+        reference_sample,
+        guide,
+    )
+    edge_colors = population_edge_colors(
+        tree,
+        tips_by_node,
+        GROUP2_SAMPLES,
+        pop1_color,
+        pop2_color,
+    )
+    print(f"Loaded tree from: {treefile}")
+    print(f"  Tips: {tree.ntips}")
+    print(f"  Group 1: {len([t for t in tip_labels if t not in GROUP2_SAMPLES])}")
+    print(f"  Group 2: {len([t for t in tip_labels if t in GROUP2_SAMPLES])}")
+    print(f"  Layout: {LAYOUT_NAMES[layout]}")
+
     canvas, axes, mark = tree.draw(
         width=width,
         height=height,
         layout=layout,
-        tip_labels=True,
+        tip_labels=display_tips,
         tip_labels_colors=tip_colors,
         tip_labels_style={
-            'font-size': f'{tip_font_size}px',
-            'anchor-shift': 20,
+            "font-size": f"{tip_font_size}px",
+            "anchor-shift": 22,
         },
-        edge_style={
-            'stroke': '#333333',
-            'stroke-width': 1.8
-        },
-        edge_align_style={
-            'stroke': '#DDDDDD',
-            'stroke-width': 0.8,
-        },
-        scale_bar=True,  # Note: underscore, not camelCase
-        node_labels=False,  # No bootstrap values available
-        node_sizes=0,  # Hide node markers
+        edge_colors=edge_colors,
+        edge_style={"stroke-width": 2.2},
+        edge_align_style={"stroke": "#E6E6E6", "stroke-width": 0.6},
+        node_labels=False,
+        node_sizes=0,
+        scale_bar=True,
+        padding=36,
     )
 
-    # Set white background
     canvas.style = {"background-color": "white"}
+    scale_label = "Substitutions per 4-fold degenerate site"
+    axes.x.label.text = scale_label
+    axes.x.label.style = {"font-size": "14px"}
+    axes.x.ticks.labels.style = {"font-size": "12px"}
 
-    # Increase x-axis tick label size
-    axes.x.label.style = {"font-size": "16px"}
-    axes.x.ticks.labels.style = {"font-size": "16px"}
+    if layout == "r":
+        add_group_labels(axes, mark, tree, GROUP2_SAMPLES, pop1_color, pop2_color)
+        add_legend(axes, mark, pop1_color, pop2_color)
+        ymin = float(min(row[1] for row in mark.ntable))
+        ymax = float(max(row[1] for row in mark.ntable))
+        axes.y.domain.min = ymin - 0.8
+        axes.y.domain.max = ymax + 1.7
 
-    # Note: Legend omitted - tip label colors indicate group membership:
-    #   Blue (#3498DB) = Group 1 (Intronerful): 11 samples
-    #   Red (#E74C3C) = Group 2 (Intronerless): RCC1749, RCC3052
-
-    print(f"\n💾 Exporting to multiple formats...")
-    print(f"   Tip label colors: Blue = Group 1 (Intronerful), Red = Group 2 (Intronerless)")
-
-    # Export to multiple formats
-    try:
-        toyplot.pdf.render(canvas, f"{output_prefix}.pdf")
-        print(f"   ✓ Saved: {output_prefix}.pdf")
-    except Exception as e:
-        print(f"   ✗ PDF export failed: {e}")
-
-    try:
-        toyplot.svg.render(canvas, f"{output_prefix}.svg")
-        print(f"   ✓ Saved: {output_prefix}.svg")
-    except Exception as e:
-        print(f"   ✗ SVG export failed: {e}")
-
-    try:
-        toyplot.png.render(canvas, f"{output_prefix}.png", scale=3)  # 3x for ~300 DPI
-        print(f"   ✓ Saved: {output_prefix}.png (high resolution)")
-    except Exception as e:
-        print(f"   ✗ PNG export failed: {e}")
-
+    export_formats(canvas, output_prefix)
     return tree
 
 
+def export_formats(canvas, output_prefix):
+    for renderer, extension in (
+        (toyplot.pdf.render, "pdf"),
+        (toyplot.svg.render, "svg"),
+        (lambda canvas, path: toyplot.png.render(canvas, path, scale=3), "png"),
+    ):
+        path = f"{output_prefix}.{extension}"
+        try:
+            renderer(canvas, path)
+            print(f"Saved: {path}")
+        except Exception as exc:
+            print(f"Failed to save {path}: {exc}")
+
+
 def print_tree_info(tree):
-    """
-    Print detailed information about the tree structure.
-
-    Parameters:
-    -----------
-    tree : toytree.tree
-        The tree object
-    """
-    print(f"\n{'='*60}")
-    print("TREE STATISTICS")
-    print(f"{'='*60}\n")
-
-    # Get tip labels
     tip_labels = tree.get_tip_labels()
-    group2_samples = {'RCC1749', 'RCC3052'}
-    group1_samples = [t for t in tip_labels if t not in group2_samples]
+    group1_samples = [tip for tip in tip_labels if tip not in GROUP2_SAMPLES]
 
-    # Basic tree info
-    print(f"Tree Structure:")
-    print(f"  Terminal nodes (leaves): {tree.ntips}")
-    print(f"  Internal nodes: {tree.nnodes - tree.ntips}")
-    print(f"  Total tree length: {tree.treenode.height:.6f}")
-
-    # Branch length statistics
-    try:
-        # Get branch lengths from the tree
-        branch_lengths = [node.dist for node in tree.treenode.traverse() if node.dist and node.dist > 0]
-
-        if branch_lengths:
-            print(f"\nBranch Length Statistics:")
-            print(f"  Minimum: {min(branch_lengths):.6f}")
-            print(f"  Maximum: {max(branch_lengths):.6f}")
-            print(f"  Mean: {sum(branch_lengths)/len(branch_lengths):.6f}")
-            print(f"  Total branches: {len(branch_lengths)}")
-    except Exception as e:
-        print(f"\n  Branch statistics unavailable: {e}")
-
-    # Sample groupings
-    print(f"\nSample Groupings:")
-    print(f"  Group 1 (Intronerful): {len(group1_samples)} samples")
+    print("\n" + "=" * 60)
+    print("TREE STATISTICS")
+    print("=" * 60)
+    print(f"Terminal nodes: {tree.ntips}")
+    print(f"Internal nodes: {tree.nnodes - tree.ntips}")
+    print(f"Total tree length: {tree.treenode.height:.6f}")
+    print("\nGroup 1 samples:")
     for sample in sorted(group1_samples):
-        print(f"    - {sample}")
-
-    print(f"\n  Group 2 (Intronerless): {len(group2_samples)} samples")
-    for sample in sorted(group2_samples):
-        print(f"    - {sample}")
-
-    print(f"\n{'='*60}\n")
-
-
-# Layout name mapping
-layout_names = {
-    'r': 'rectangular',
-    'c': 'circular',
-    'd': 'down',
-    'u': 'up'
-}
+        print(f"  - {sample}")
+    print("\nGroup 2 samples:")
+    for sample in sorted(GROUP2_SAMPLES):
+        print(f"  - {sample}")
+    print("=" * 60 + "\n")
 
 
 def main():
-    """Main function with argument parsing."""
-
-    parser = argparse.ArgumentParser(
-        description='Create publication-quality phylogenetic tree visualization using toytree',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Basic usage (rectangular tree)
-  python plot_tree_improved.py -i rerooted_tree.treefile
-
-  # Circular layout
-  python plot_tree_improved.py -i rerooted_tree.treefile --layout circular
-
-  # Custom dimensions and font size
-  python plot_tree_improved.py -i rerooted_tree.treefile --width 1000 --height 800 --tip-font-size 14
-
-  # Custom output name
-  python plot_tree_improved.py -i rerooted_tree.treefile -o publication_figure
-
-  # Info only (no plots)
-  python plot_tree_improved.py -i rerooted_tree.treefile --info-only
-        """)
-
-    parser.add_argument('-i', '--input',
-                       default='rerooted_tree.treefile',
-                       help='Input tree file (Newick format). Default: rerooted_tree.treefile')
-    parser.add_argument('-o', '--output',
-                       default='phylogenetic_tree_improved',
-                       help='Output file prefix (without extension). Default: phylogenetic_tree_improved')
-    parser.add_argument('--width', type=int, default=900,
-                       help='Canvas width in pixels. Default: 900')
-    parser.add_argument('--height', type=int, default=600,
-                       help='Canvas height in pixels. Default: 600')
-    parser.add_argument('--layout', choices=['rectangular', 'circular'],
-                       default='rectangular',
-                       help='Tree layout style. Default: rectangular')
-    parser.add_argument('--tip-font-size', type=int, default=16,
-                       help='Tip label font size in pixels. Default: 16')
-    parser.add_argument('--info-only', action='store_true',
-                       help='Only print tree information, don\'t create plots')
-
-    args = parser.parse_args()
-
-    # Convert layout name to code
-    layout_code = 'r' if args.layout == 'rectangular' else 'c'
-
-    print("="*60)
-    print("PUBLICATION-QUALITY PHYLOGENETIC TREE VISUALIZATION")
-    print("="*60)
+    args = parse_args()
+    tree = load_tree(args.input)
 
     if args.info_only:
-        # Load tree and print info only
-        try:
-            tree = toytree.tree(args.input)
-            print_tree_info(tree)
-        except Exception as e:
-            print(f"❌ Error loading tree: {e}")
-            sys.exit(1)
-    else:
-        # Create tree visualization
-        tree = plot_phylogenetic_tree_toytree(
-            args.input,
-            args.output,
-            width=args.width,
-            height=args.height,
-            tip_font_size=args.tip_font_size,
-            layout=layout_code
-        )
-
-        # Print tree info
         print_tree_info(tree)
+        return
 
-        print("✅ Tree visualization complete!\n")
+    tree = plot_phylogenetic_tree(
+        args.input,
+        args.output,
+        args.color_guide,
+        width=args.width,
+        height=args.height,
+        layout="r" if args.layout == "rectangular" else "c",
+        tip_font_size=args.tip_font_size,
+        reference_sample=args.reference_sample,
+    )
+    print_tree_info(tree)
 
 
 if __name__ == "__main__":

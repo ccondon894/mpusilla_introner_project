@@ -600,7 +600,8 @@ rule plot_all_samples_analysis:
     input:
         metrics = DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
         body_dxy = _EVO_DIVERSITY_DIR / "shared_introner_body_dxy_{flank_length}bp.tsv",
-        body_decay = INTRONER_BODY_DECAY_DIR / "introner_body_decay.per_locus.tsv"
+        body_decay = INTRONER_BODY_DECAY_DIR / "introner_body_decay.per_locus.tsv",
+        color_guide = PROJECT_ROOT / "master_figure_color_guide.tsv"
     output:
         box_plot = EVOLUTION_PLOTS_DIR / "all_samples_box_plots_{flank_length}bp.png"
     shell:
@@ -611,7 +612,8 @@ rule plot_all_samples_analysis:
             --body-dxy {input.body_dxy} \
             --body-decay {input.body_decay} \
             --output {output.box_plot} \
-            --flank_length {wildcards.flank_length}
+            --flank_length {wildcards.flank_length} \
+            --color-guide {input.color_guide}
         """
 
 

@@ -146,7 +146,7 @@ def write_summary(summary_path, spectrum, used, skipped):
 
 def plot_heatmap(spectrum, group1_n, group2_n, output_file):
     log_spectrum = np.log10(spectrum + 1)
-    annot = np.where(spectrum > 0, spectrum.astype(str), "")
+    annot = spectrum.astype(str)
 
     plt.figure(figsize=(12, 3))
     ax = sns.heatmap(

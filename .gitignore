@@ -66,11 +66,17 @@ __pycache__/
 # ============================================================
 .claude/
 .cursor/
+.codex/
+.agents/
+.snakemake-cache/
+.vscode/
 # documents
 docs/
-
 completed.md
 tasks.md
 
 # scratch analysis
 analysis/
+
+# Agents
+AGENTS.md
