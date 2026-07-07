@@ -1,10 +1,3 @@
-# ============================================================
-# 05_ortholog_detection.smk - Synteny-Based Ortholog Detection
-# ============================================================
-#
-# Identifies orthologous introner loci across samples using a
-# synteny-based approach with flanking region alignment.
-#
 # Pipeline Overview:
 # - Phase 0: GTF to BED conversion for gene annotations
 # - Phase 1A: Synteny mapping (upstream/downstream gene context)
@@ -12,17 +5,9 @@
 # - Phase 1C: Initial ortholog pairing (standard alignments)
 # - Phase 2: Rescue alignments for Group1↔Group2 pairs
 # - Final: Build genotype matrix, fix orientations, resolve groups, annotate
-#
-# Adapted from: /scratch1/chris/introner-genotyping-pipeline/rules/ortholog_detection_pipeline_v2.smk
-#
-# ============================================================
 
 import os
 from pathlib import Path
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 ORTHOLOG_DIR = GENOTYPING_DIR / "ortholog_detection"
@@ -60,10 +45,6 @@ BWA_RESCUE_B = config["params"]["bwa_rescue"]["B"]
 # Annotation parameters
 FLANK_LENGTH = config["params"]["flanks"]["extraction_length"]
 SIMILARITY_CUTOFF = config["params"]["similarity"]["cutoff"]
-
-# ============================================================
-# PHASE 0: Gene Annotation Processing
-# ============================================================
 
 rule gtf_to_gene_bed:
     """
@@ -160,11 +141,7 @@ rule detect_tandem_duplicates:
             --min-identity {params.min_identity}
         """
 
-
-# ============================================================
 # PHASE 1A: Synteny-Based Context Mapping
-# ============================================================
-
 rule annotate_introner_context:
     """
     Create introner synteny map with three-part genomic fingerprint.
@@ -230,10 +207,8 @@ rule annotate_introner_context:
         """
 
 
-# ============================================================
-# PHASE 1B: Flanking Region Extraction and Indexing
-# ============================================================
 
+# PHASE 1B: Flanking Region Extraction and Indexing
 rule extract_flanks:
     """
     Extract left and right flanking sequences from candidate loci.
@@ -285,11 +260,7 @@ rule bwa_align_flanks:
         samtools index {output.right_bam}
         """
 
-
-# ============================================================
 # PHASE 1C: Initial Ortholog Pairing
-# ============================================================
-
 rule pair_orthologs_initial:
     """
     PHASE 1 INITIAL PASS: Pair orthologs from Phase 1 BAM alignments.
@@ -436,10 +407,7 @@ rule pair_orthologs_rescue:
         """
 
 
-# ============================================================
 # FINAL: Build and Annotate Genotype Matrix
-# ============================================================
-
 rule build_genotype_matrix:
     """
     Build genotype matrix from ortholog detection results.
@@ -489,8 +457,6 @@ rule resolve_ortholog_groups:
     Replaces the former classify/split/reclassify/cross-split/reclassify/
     sequence-comparison chain. Iterates classification and splitting until
     stable, then refines statuses with body-sequence identity.
-
-    Produces a pre-annotation resolved matrix plus provenance sidecars.
     """
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.oriented.tsv",
@@ -545,18 +511,6 @@ rule resolve_ortholog_groups:
 rule annotate_missing_data:
     """
     Annotate missing gene and family data in the genotype matrix.
-
-    Strategy:
-    1. Drop ortholog groups with within_group_status of 'discordant' or
-       'uncertain' (unusable for pi/dxy calculations)
-
-    2. Gene annotation (ALL rows): Use bedtools overlap to find genes
-       at each introner's genomic coordinates (works for all scenarios)
-
-    3. Family annotation (Scenario 1 only): Use sequence similarity
-       to match against reference introner families (presence=1 only)
-
-    Output: Fully annotated genotype matrix ready for downstream analysis
     """
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.resolved.tsv",

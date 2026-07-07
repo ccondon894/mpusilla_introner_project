@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Consolidated ortholog group resolver (Milestone 3).
+Consolidated ortholog group resolver.
 
 Iterates classify -> split -> reclassify until stable, then applies sequence
 identity refinement. Replaces the multi-rule chain:

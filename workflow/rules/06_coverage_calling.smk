@@ -129,13 +129,7 @@ rule call_introner_presence:
         gt_matrix = GENOTYPING_DIR / "genotype_matrix.tsv"
     output:
         calls = COVERAGE_DIR / "{sample}.loci.coverage_calls.bed"
-    # log:
-    #     COVERAGE_LOG_DIR / "{sample}.coverage_calls.log"
     shell:
-        # """
-        # python {PROJECT_ROOT}/scripts/genotyping/call_locus_from_bam_coverage_v2.py \
-        #     {input.bed} {input.depth} {input.gt_matrix} {output.calls} > {log} 2>&1
-        # """
         """
         introner-caller {input.bed} {input.depth} {output.calls}
         """
