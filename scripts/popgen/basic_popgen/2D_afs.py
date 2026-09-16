@@ -11,7 +11,10 @@ def parse_args():
     parser.add_argument('--group1', type=str, required=True, help="Comma-separated Group1 sample names")
     parser.add_argument('--group2', type=str, required=True, help="Comma-separated Group2 sample names (used as pop1)")
     parser.add_argument('--output_png', type=str, required=True, help="Output plot path (extension determines format)")
-    parser.add_argument('--output_pdf', type=str, required=True, help="Output plot path (extension determines format)")    
+    parser.add_argument('--output_pdf', type=str, required=True, help="Output plot path (extension determines format)")
+    parser.add_argument('--figure-width', type=float, default=6.5, help="Figure width in inches")
+    parser.add_argument('--figure-height', type=float, default=2.7, help="Figure height in inches")
+    parser.add_argument('--font-size', type=float, default=10.0, help="Base font size in points")
     return parser.parse_args()
 
 def compute_folded_allele_frequency_spectrum(vcf_file, pop1_samples, obsolete_samples):
@@ -78,37 +81,43 @@ def print_spectrum(spectrum):
         row_str = f"Minor Allele Count {pop1_count}: {row}"
         print(row_str)
 
-def plot_2d_afs_heatmap(spectrum, output_pdf, output_png):
+def plot_2d_afs_heatmap(
+    spectrum,
+    output_pdf,
+    output_png,
+    figure_width,
+    figure_height,
+    font_size,
+):
     # Log scale the counts, setting zeros to a small positive value to avoid log(0)
     log_spectrum = np.log10(spectrum + 1)  # Adding 1 to avoid log(0)
 
-    n_rows, n_cols = log_spectrum.shape
-    cell_size = 0.72
-    fig_width = n_cols * cell_size + 2.4
-    fig_height = n_rows * cell_size + 1.6
-
-    # Create the heatmap with square cells.
-    plt.figure(figsize=(fig_width, fig_height))
+    fig, ax = plt.subplots(figsize=(figure_width, figure_height))
     ax = sns.heatmap(log_spectrum, annot=log_spectrum, fmt=".1f", cmap='viridis',
-                     cbar_kws={'label': 'log10(count)'},
+                     annot_kws={'fontsize': font_size - 1},
+                     cbar_kws={'label': 'log10(count)', 'pad': 0.025, 'aspect': 16},
                      linewidths=0.5, linecolor='white',
-                     square=True)
+                     square=False, ax=ax)
 
     # Add clean labels (no title for publication-quality)
-    plt.xlabel("Population 1 4D Site Frequency", fontsize=13)
-    plt.ylabel("Population 2 4D Site Frequency", fontsize=13)
+    ax.set_xlabel("Population 1 minor allele count", fontsize=font_size + 1)
+    ax.set_ylabel("Population 2\nminor allele count", fontsize=font_size + 1)
     # plt.title("Folded 2D Allele Frequency Spectrum")
 
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=0, ha='center', fontsize=12)
-    ax.set_yticklabels(ax.get_yticklabels(), fontsize=12)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=0, ha='center', fontsize=font_size)
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0, fontsize=font_size)
     # Set y-axis to show values correctly (inverted to match typical AFS orientation)
-    plt.gca().invert_yaxis()
+    ax.invert_yaxis()
 
-    plt.tight_layout()
+    colorbar = ax.collections[0].colorbar
+    colorbar.ax.tick_params(labelsize=font_size - 1)
+    colorbar.set_label('log10(count)', fontsize=font_size)
+
+    fig.tight_layout(pad=0.45)
 
     # Save the plot with high DPI
-    plt.savefig(output_pdf, dpi=300, bbox_inches='tight')
-    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, dpi=300, bbox_inches='tight', pad_inches=0.03)
+    fig.savefig(output_png, dpi=300, bbox_inches='tight', pad_inches=0.03)
 
 
 def main():
@@ -118,7 +127,14 @@ def main():
     spectrum = compute_folded_allele_frequency_spectrum(args.vcf, pop1_samples, obsolete_samples)
 
     print_spectrum(spectrum)
-    plot_2d_afs_heatmap(spectrum, args.output_pdf, args.output_png)
+    plot_2d_afs_heatmap(
+        spectrum,
+        args.output_pdf,
+        args.output_png,
+        args.figure_width,
+        args.figure_height,
+        args.font_size,
+    )
 
 if __name__ == "__main__":
     main()

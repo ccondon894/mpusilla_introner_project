@@ -718,7 +718,14 @@ def draw_segment(
     )
 
 
-def draw_isoform(ax, isoform: IsoformModel, y: float, color: str, label_size: int) -> None:
+def draw_isoform(
+    ax,
+    isoform: IsoformModel,
+    y: float,
+    color: str,
+    label_size: int,
+    display_label: str | None = None,
+) -> None:
     tx_start = min(start for start, _ in isoform.exons)
     tx_end = max(end for _, end in isoform.exons)
     ax.plot([tx_start, tx_end], [y, y], color="#1f1f1f", linewidth=0.55, zorder=1)
@@ -738,7 +745,14 @@ def draw_isoform(ax, isoform: IsoformModel, y: float, color: str, label_size: in
             draw_segment(ax, cds_piece[0], cds_piece[1], y, 0.48, color)
         for utr_start, utr_end in utr_pieces:
             draw_segment(ax, utr_start, utr_end, y, 0.22, "#F4A51C", "#B77A12")
-    ax.text(tx_start - 35, y, isoform.transcript_id, ha="right", va="center", fontsize=label_size)
+    ax.text(
+        tx_start - 35,
+        y,
+        display_label or isoform.transcript_id,
+        ha="right",
+        va="center",
+        fontsize=label_size,
+    )
 
 
 def write_custom_isoform_plot(
@@ -748,15 +762,24 @@ def write_custom_isoform_plot(
     loci: list[str],
     sample_intervals: dict[str, dict[str, LocusInterval]],
     label_size: int,
+    fig_width: float,
+    fig_height: float | None,
+    tick_size: float,
+    axis_label_size: float,
+    title_size: float,
+    dpi: int,
+    introner_style: str,
+    introner_color: str,
 ) -> dict[str, int]:
     import matplotlib.pyplot as plt
 
     row_counts = [1 + len(panel.isoforms) for panel in panels]
-    fig_height = max(3.2, 0.36 * sum(row_counts) + 1.5)
+    if fig_height is None:
+        fig_height = max(3.2, 0.36 * sum(row_counts) + 1.5)
     fig, axes = plt.subplots(
         nrows=len(panels),
         ncols=1,
-        figsize=(12, fig_height),
+        figsize=(fig_width, fig_height),
         height_ratios=row_counts,
         squeeze=False,
     )
@@ -782,18 +805,26 @@ def write_custom_isoform_plot(
         corrected_region_start = transform_pos(panel.region_start, deletions)
         corrected_region_end = transform_pos(panel.region_end, deletions)
         ax.set_xlim(corrected_region_start, corrected_region_end)
-        ax.set_ylim(-0.8, row_count + 0.8)
+        ax.set_ylim(-0.8, row_count + 1.15)
         ax.set_yticks([])
-        ax.tick_params(axis="x", labelsize=7, length=2)
+        ax.tick_params(axis="x", labelsize=tick_size, length=3, width=0.8)
 
-        y = row_count - 0.35
+        gene_y = row_count - 0.35
+        y = gene_y
         gene_model = gene_model_isoform(
             panel.sample, panel.transcript, panel.exons, panel.origin, deletions
         )
-        draw_isoform(ax, gene_model, y, "#5B8CC0", label_size)
+        draw_isoform(
+            ax,
+            gene_model,
+            y,
+            "#5B8CC0",
+            label_size,
+            display_label="gene",
+        )
         ax.axhline(y - 0.55, color="#C8C8C8", linewidth=0.45, zorder=0)
 
-        for isoform in panel.isoforms:
+        for isoform_number, isoform in enumerate(panel.isoforms, start=1):
             y -= 1
             plot_isoform = corrected_isoform(isoform, deletions)
             if not plot_isoform.exons or not has_coding_exon(
@@ -806,10 +837,11 @@ def write_custom_isoform_plot(
                 y,
                 sample_colors.get(panel.sample, "#6C6C6C"),
                 label_size,
+                display_label=f"Isoform {isoform_number}",
             )
         isoform_counts[panel.sample] = len(panel.isoforms)
 
-        for oid in loci:
+        for locus_index, oid in enumerate(loci):
             interval = sample_intervals.get(panel.sample, {}).get(oid)
             if interval is None or interval.contig != panel.contig:
                 continue
@@ -836,15 +868,32 @@ def write_custom_isoform_plot(
                     ) or (local_start, local_end)
                 plot_start = transform_pos(span_start, deletions)
                 plot_end = transform_pos(span_end, deletions)
-                ax.axvspan(plot_start, plot_end, color=color, alpha=0.2, linewidth=0)
+                if introner_style == "highlight":
+                    ax.axvspan(
+                        plot_start,
+                        plot_end,
+                        color=color,
+                        alpha=0.2,
+                        linewidth=0,
+                    )
+                else:
+                    ax.plot(
+                        [plot_start, plot_end],
+                        [gene_y, gene_y],
+                        color=introner_color,
+                        linewidth=4.0,
+                        solid_capstyle="butt",
+                        zorder=5,
+                    )
                 label_x = (plot_start + plot_end) / 2
+            locus_letter = chr(ord("A") + locus_index)
             label = (
-                f"introner {oid.replace('ortholog_id_', '')}\n"
+                f"introner {locus_letter}\n"
                 f"{presence_labels.get(interval.presence, 'Missing')}"
             )
             ax.text(
                 label_x,
-                row_count + 0.20,
+                row_count + 0.25,
                 label,
                 ha="center",
                 va="bottom",
@@ -854,15 +903,15 @@ def write_custom_isoform_plot(
         ax.set_xlabel(
             f"{panel.sample} chromosome {chromosome_label(panel.contig)}; "
             "bp from gene start",
-            fontsize=8,
+            fontsize=axis_label_size,
         )
         for spine in ax.spines.values():
             spine.set_linewidth(0.7)
 
-    fig.suptitle(gene_id, x=0.01, ha="left", fontsize=9, weight="bold")
+    fig.suptitle(gene_id, x=0.01, ha="left", fontsize=title_size, weight="bold")
     fig.tight_layout()
     for path in paths:
-        fig.savefig(path, dpi=220)
+        fig.savefig(path, dpi=dpi)
     plt.close(fig)
     return isoform_counts
 
@@ -912,6 +961,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bottom-sample", default="RCC1614")
     parser.add_argument("--third-sample", default="RCC1749")
     parser.add_argument("--label-size", type=int, default=5)
+    parser.add_argument(
+        "--fig-width",
+        type=float,
+        default=12.0,
+        help="Figure width in inches.",
+    )
+    parser.add_argument(
+        "--fig-height",
+        type=float,
+        help="Optional fixed figure height in inches; otherwise determined by row count.",
+    )
+    parser.add_argument("--tick-size", type=float, default=7.0)
+    parser.add_argument("--axis-label-size", type=float, default=8.0)
+    parser.add_argument("--title-size", type=float, default=9.0)
+    parser.add_argument("--dpi", type=int, default=220)
+    parser.add_argument(
+        "--introner-style",
+        choices=["highlight", "gene-bar"],
+        default="highlight",
+        help=(
+            "Draw present introners as full-height shaded spans or as compact "
+            "bars on the gene-model track."
+        ),
+    )
+    parser.add_argument(
+        "--introner-color",
+        default="#7C6BB0",
+        help="Color used for present introners when --introner-style=gene-bar.",
+    )
     parser.add_argument("--format", choices=["pdf", "png", "both"], default="both")
     parser.add_argument(
         "--output-prefix",
@@ -991,6 +1069,14 @@ def main() -> None:
         loci,
         sample_intervals,
         args.label_size,
+        args.fig_width,
+        args.fig_height,
+        args.tick_size,
+        args.axis_label_size,
+        args.title_size,
+        args.dpi,
+        args.introner_style,
+        args.introner_color,
     )
     print(f"Gene: {args.gene}")
     print(f"Output prefix sample: {args.sample}")

@@ -44,6 +44,11 @@ def parse_args():
     parser.add_argument("--output-tsv", required=True)
     parser.add_argument("--color-guide", default=str(DEFAULT_GUIDE_PATH))
     parser.add_argument(
+        "--full-border",
+        action="store_true",
+        help="Draw all four axes spines around the plotting area.",
+    )
+    parser.add_argument(
         "--min-rate",
         type=float,
         default=1e-14,
@@ -58,14 +63,14 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_category(path, window_type, label, population, min_rate, max_rate):
+def load_category(path, window_type, label, population, min_rate, max_rate, column="type"):
     df = pd.read_csv(path, sep="\t")
-    required = {"type", "rate"}
+    required = {column, "rate"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"{path} missing columns: {', '.join(sorted(missing))}")
 
-    subset = df[df["type"].eq(window_type)].copy()
+    subset = df[df[column].eq(window_type)].copy()
     subset["rate"] = pd.to_numeric(subset["rate"], errors="coerce")
     subset = subset.dropna(subset=["rate"])
     subset = subset[(subset["rate"] > 0) & (subset["rate"] >= min_rate)]
@@ -77,49 +82,17 @@ def load_category(path, window_type, label, population, min_rate, max_rate):
 
 
 def build_plot_data(args):
-    frames = [
-        load_category(
-            args.group1_all_windows,
-            "non_introner_containing",
-            "Exonic background\nPopulation 1",
-            "Population 1",
-            args.min_rate,
-            args.max_rate,
-        ),
-        load_category(
-            args.group1_all_windows,
-            "introner_containing",
-            "All introners\nPopulation 1",
-            "Population 1",
-            args.min_rate,
-            args.max_rate,
-        ),
-        load_category(
-            args.group1_polymorphic_windows,
-            "introner_containing",
-            "Polymorphic introners\nPopulation 1",
-            "Population 1",
-            args.min_rate,
-            args.max_rate,
-        ),
-        load_category(
-            args.group2_windows,
-            "non_introner_containing",
-            "Exonic background\nPopulation 2",
-            "Population 2",
-            args.min_rate,
-            args.max_rate,
-        ),
-        load_category(
-            args.group2_windows,
-            "introner_containing",
-            "All introners\nPopulation 2",
-            "Population 2",
-            args.min_rate,
-            args.max_rate,
-        ),
-    ]
-    return pd.concat(frames, ignore_index=True)
+    group1 = pd.read_csv(args.group1_all_windows, sep='\t', nrows=0)
+    common = 'comparison_class' in group1.columns
+    column = 'comparison_class' if common else 'type'
+    specifications = [
+        (args.group1_all_windows, 'common_exonic_background' if common else 'non_introner_containing', CATEGORY_ORDER[0], 'Population 1', column),
+        (args.group1_all_windows, 'all_introner' if common else 'introner_containing', CATEGORY_ORDER[1], 'Population 1', column),
+        (args.group1_polymorphic_windows, 'polymorphic_introner' if common else 'introner_containing', CATEGORY_ORDER[2], 'Population 1', column),
+        (args.group2_windows, 'non_introner_containing', CATEGORY_ORDER[3], 'Population 2', 'type'),
+        (args.group2_windows, 'introner_containing', CATEGORY_ORDER[4], 'Population 2', 'type')]
+    return pd.concat([load_category(path, kind, label, population, args.min_rate, args.max_rate, column)
+                      for path, kind, label, population, column in specifications], ignore_index=True)
 
 
 def category_colors(color_guide):
@@ -212,7 +185,8 @@ def add_significance_bars(ax, plot_df):
         ax.set_ylim(top=base + len(tests) * spacing + y_range * 0.08)
 
 
-def plot_violin(plot_df, color_guide, output_pdf, output_png):
+def plot_violin(plot_df, color_guide, output_pdf, output_png,
+                full_border=False):
     sns.set_style("white")
     palette = category_colors(color_guide)
 
@@ -240,8 +214,8 @@ def plot_violin(plot_df, color_guide, output_pdf, output_png):
     ax.tick_params(axis="y", labelsize=11)
     add_significance_bars(ax, plot_df)
     ax.grid(False)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(full_border)
+    ax.spines["right"].set_visible(full_border)
     fig.tight_layout()
 
     Path(output_pdf).parent.mkdir(parents=True, exist_ok=True)
@@ -258,7 +232,13 @@ def main():
     Path(args.output_tsv).parent.mkdir(parents=True, exist_ok=True)
     plot_df.to_csv(args.output_tsv, sep="\t", index=False)
     print_summary(plot_df)
-    plot_violin(plot_df, color_guide, args.output_pdf, args.output_png)
+    plot_violin(
+        plot_df,
+        color_guide,
+        args.output_pdf,
+        args.output_png,
+        full_border=args.full_border,
+    )
     print(f"Wrote {args.output_png}")
 
 

@@ -186,6 +186,12 @@ def split_matrix(
     mapping_records: list[dict] = []
     n_split = 0
 
+    splitter.assert_unique_present_loci(
+        rows, context=f"resolver iteration {iteration} input")
+    # Seed ownership from the entire matrix before processing any group.  The
+    # same mutable registry is then shared by every recovery call in this pass.
+    used_coords_per_sample = splitter.build_used_coords_per_sample(rows)
+
     for oid in sorted(ortholog_groups):
         row_indices = ortholog_groups[oid]
         if cross_group_only:
@@ -214,6 +220,7 @@ def split_matrix(
                 tandems,
                 cds_by_sample_gene,
                 codon_tolerance,
+                used_coords_per_sample,
             )
 
         if result is None:
@@ -273,6 +280,9 @@ def split_matrix(
         out_fieldnames.append("original_ortholog_id")
     for row in output_rows:
         row.setdefault("original_ortholog_id", row.get("ortholog_id", ""))
+
+    splitter.assert_unique_present_loci(
+        output_rows, context=f"resolver iteration {iteration} output")
 
     return output_rows, out_fieldnames, mapping_records, n_split
 
@@ -645,6 +655,7 @@ def main() -> None:
         args.within_group_identity_threshold,
         args.cross_group_identity_threshold,
     )
+    splitter.assert_unique_present_loci(rows, context="resolved matrix")
 
     n_mixed = count_mixed_family_groups(rows)
     n_groups = len(group_rows_by_ortholog(rows))

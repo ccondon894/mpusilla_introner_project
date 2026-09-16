@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 """
 Negative Binomial GLM: Gene Expression Prediction with Library Size Normalization
 
-Reads a pre-merged CSV (from prepare_expression_data inline rule) containing:
+Reads a pre-merged CSV produced by prepare_expression_glm_data.py containing:
   gene_id, replicate, raw_count, library_size, log_library_size,
-  strain, introner_gain, introner_loss, baseline_introner_count,
-  log_cds_length, n_isoforms, GC_content
+  strain, reference_relative_gain_count, reference_relative_loss_count,
+  current_introner_count, log_gene_span, n_extra_isoforms, GC_content
 
 Usage (Snakemake):
     python negative_binomial_glm.py \
@@ -71,16 +70,13 @@ def main():
     print(f"  Unique genes: {merged['gene_id'].nunique()}")
     print(f"  Strains: {merged['strain'].unique().tolist()}")
 
-    # Ensure log_cds_length exists
-    if 'log_cds_length' not in merged.columns and 'cds_length' in merged.columns:
-        merged['log_cds_length'] = np.log(merged['cds_length'])
-
-    # Build formula to match the older manuscript-facing model.
+    # Build the expression model from the locus-aware isoform feature table.
     ref = args.reference
     formula_parts = [f"C(strain, Treatment(reference='{ref}'))"]
 
-    for var in ['introner_gain', 'introner_loss', 'baseline_introner_count',
-                'log_cds_length', 'n_isoforms', 'GC_content']:
+    for var in ['reference_relative_gain_count',
+                'reference_relative_loss_count', 'current_introner_count',
+                'log_gene_span', 'n_extra_isoforms', 'GC_content']:
         if var in merged.columns:
             formula_parts.append(var)
 
@@ -158,8 +154,9 @@ def main():
                 f"{merged['library_size'].max():,.0f}\n\n")
 
         f.write("Gene Features:\n")
-        for col in ['baseline_introner_count', 'introner_gain', 'introner_loss',
-                    'log_cds_length', 'n_isoforms', 'GC_content']:
+        for col in ['reference_relative_gain_count',
+                    'reference_relative_loss_count', 'current_introner_count',
+                    'log_gene_span', 'n_extra_isoforms', 'GC_content']:
             if col in merged.columns:
                 f.write(f"  {col}: mean={merged[col].mean():.4f}, "
                         f"median={merged[col].median():.4f}, "

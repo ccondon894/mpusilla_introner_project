@@ -42,10 +42,25 @@ def parse_arguments():
                        help='Flanking sequence length for plot title')
     parser.add_argument('--color-guide', default=str(DEFAULT_GUIDE_PATH),
                        help='Master figure color guide TSV')
+    parser.add_argument('--fig-width', type=float, default=15.0,
+                        help='Figure width in inches (default: 15).')
+    parser.add_argument('--fig-height', type=float, default=7.5,
+                        help='Figure height in inches (default: 7.5).')
+    parser.add_argument('--axis-fontsize', type=float, default=17.0,
+                        help='Axis-label font size in points (default: 17).')
+    parser.add_argument('--category-fontsize', type=float, default=14.0,
+                        help='Category-label font size in points (default: 14).')
+    parser.add_argument('--tick-fontsize', type=float, default=14.0,
+                        help='Numeric tick-label size in points (default: 14).')
+    parser.add_argument('--significance-fontsize', type=float, default=12.0,
+                        help='Significance-label size in points (default: 12).')
+    parser.add_argument('--full-border', action='store_true',
+                        help='Draw all four axes spines around each violin panel.')
     return parser.parse_args()
 
 
-def add_significance_bar(ax, x1, x2, y, p_value, height_offset):
+def add_significance_bar(ax, x1, x2, y, p_value, height_offset,
+                         fontsize=12.0):
     """Add a significance bar between two positions on the plot."""
     if p_value < 0.001:
         sig_text = '***'
@@ -59,7 +74,7 @@ def add_significance_bar(ax, x1, x2, y, p_value, height_offset):
     ax.plot([x1, x1, x2, x2], [y, y + height_offset, y + height_offset, y],
             linewidth=1.3, color='black')
     ax.text((x1 + x2) / 2, y + height_offset, sig_text,
-            ha='center', va='bottom', fontsize=12, fontweight='bold')
+            ha='center', va='bottom', fontsize=fontsize, fontweight='bold')
 
 
 def perform_pairwise_tests(data_dict, comparisons, correction='bonferroni'):
@@ -186,7 +201,8 @@ def make_boxplot_panel(ax, data_dict, labels, colors, ylabel, comparisons=None):
         ax.set_ylim(bottom=0, top=needed_ylim)
 
 
-def add_pairwise_significance(ax, data_dict, labels, comparisons):
+def add_pairwise_significance(ax, data_dict, labels, comparisons,
+                              significance_fontsize=12.0):
     """Add Mann-Whitney U significance bars for selected comparisons."""
     if not comparisons:
         return
@@ -222,6 +238,7 @@ def add_pairwise_significance(ax, data_dict, labels, comparisons):
             y,
             result['p_value_corrected'],
             height_offset=bar_height,
+            fontsize=significance_fontsize,
         )
         print(f"  {cat1} vs {cat2}: p={result['p_value']:.2e} "
               f"(corrected={result['p_value_corrected']:.2e}), "
@@ -232,7 +249,10 @@ def add_pairwise_significance(ax, data_dict, labels, comparisons):
         ax.set_ylim(top=y_base + n_drawn * bar_spacing + value_range * 0.12)
 
 
-def make_violin(ax, data_dict, labels, colors, ylabel, title, comparisons=None):
+def make_violin(ax, data_dict, labels, colors, ylabel, title, comparisons=None,
+                axis_fontsize=17.0, category_fontsize=14.0,
+                tick_fontsize=14.0, significance_fontsize=12.0,
+                full_border=False):
     """Create one violin plot with quartile guides and significance bars."""
     records = [
         {'category': label, 'value': value}
@@ -252,14 +272,21 @@ def make_violin(ax, data_dict, labels, colors, ylabel, title, comparisons=None):
                    legend=False, linewidth=1.2)
 
     ax.set_xlabel('')
-    ax.set_ylabel(ylabel, fontsize=17)
+    ax.set_ylabel(ylabel, fontsize=axis_fontsize)
     ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=35, ha='right', fontsize=14)
-    ax.tick_params(axis='y', labelsize=14)
+    ax.set_xticklabels(labels, rotation=35, ha='right',
+                       fontsize=category_fontsize)
+    ax.tick_params(axis='y', labelsize=tick_fontsize)
     ax.grid(False)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    add_pairwise_significance(ax, data_dict, labels, comparisons)
+    ax.spines['top'].set_visible(full_border)
+    ax.spines['right'].set_visible(full_border)
+    add_pairwise_significance(
+        ax,
+        data_dict,
+        labels,
+        comparisons,
+        significance_fontsize=significance_fontsize,
+    )
 
 
 def main():
@@ -331,7 +358,9 @@ def main():
         print_group_summary(key, vals)
 
     # ---- Create figure ----
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7.5))
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2, figsize=(args.fig_width, args.fig_height)
+    )
     dxy_comparisons = [
         ('Population 1\nspecific flanks', 'Population 2\nspecific flanks'),
         ('Population 1\nspecific flanks', 'ancestral\nflanks'),
@@ -339,13 +368,20 @@ def main():
         ('ancestral\nflanks', 'ancestral\nbody'),
     ]
     pi_comparisons = [
-        ('polymorphic\nbody', 'Population 1 fixed\nbody'),
+        ('Population 1\npolymorphic body', 'Population 1\nfixed body'),
     ]
+    plot_style = {
+        'axis_fontsize': args.axis_fontsize,
+        'category_fontsize': args.category_fontsize,
+        'tick_fontsize': args.tick_fontsize,
+        'significance_fontsize': args.significance_fontsize,
+        'full_border': args.full_border,
+    }
     make_violin(ax1, dxy_data, dxy_labels, dxy_colors, 'Dxy',
                 f'Flank and ancestral-body Dxy ({args.flank_length} bp flanks)',
-                comparisons=dxy_comparisons)
+                comparisons=dxy_comparisons, **plot_style)
     make_violin(ax2, pi_data, pi_labels, pi_colors, 'Pi',
-                'Introner-body pi', comparisons=pi_comparisons)
+                'Introner-body pi', comparisons=pi_comparisons, **plot_style)
 
     plt.tight_layout()
 

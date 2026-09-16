@@ -213,13 +213,17 @@ def plot_phylogenetic_tree(
         node_labels=False,
         node_sizes=0,
         scale_bar=True,
-        padding=36,
+        padding=52,
     )
 
     canvas.style = {"background-color": "white"}
     scale_label = "Substitutions per 4-fold degenerate site"
     axes.x.label.text = scale_label
-    axes.x.label.style = {"font-size": "14px"}
+    axes.x.label.offset = 18
+    axes.x.label.style = {
+        "font-size": "14px",
+        "font-weight": "normal",
+    }
     axes.x.ticks.labels.style = {"font-size": "12px"}
 
     if layout == "r":

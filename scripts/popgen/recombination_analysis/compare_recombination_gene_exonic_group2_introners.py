@@ -10,12 +10,13 @@ Compares introner-containing exonic windows vs non-introner-containing exonic wi
 Algorithm:
 1. Parse GTF to get exon positions per gene
 2. Extract introners from genotype matrix where RCC1749 or RCC3052 has presence == 1
-3. Cluster introners per gene (merge <10kb apart)
-4. Generate windows per gene:
+3. Exclude configured contigs (including the RCC1749 mating-type contig)
+4. Cluster introners per gene (merge <10kb apart)
+5. Generate windows per gene:
    - For introner clusters: center 10kb window on cluster midpoint
    - For non-introner exonic regions: tile with 10kb windows
-5. Calculate weighted mean recombination rates from pyrho
-6. Perform Mann-Whitney U test
+6. Calculate weighted mean recombination rates from pyrho
+7. Perform Mann-Whitney U test
 """
 
 import argparse
@@ -348,6 +349,15 @@ def main():
         help='Genotype matrix TSV file'
     )
     parser.add_argument(
+        '--exclude-contig',
+        action='append',
+        default=[],
+        help=(
+            'Contig to exclude from the analysis. May be supplied more than once; '
+            'full and normalized RCC1749 contig names are both accepted.'
+        )
+    )
+    parser.add_argument(
         '--window_size',
         type=int,
         default=10000,
@@ -364,14 +374,30 @@ def main():
         default='gene_exonic_group2_introners',
         help='Output file prefix'
     )
+    parser.add_argument('--exclude-start', type=int, default=None, help='1-based inclusive start of the excluded interval on --exclude-contig.')
+    parser.add_argument('--exclude-end', type=int, default=None, help='1-based inclusive end of the excluded interval on --exclude-contig.')
     args = parser.parse_args()
+    if (args.exclude_start is None) != (args.exclude_end is None):
+        parser.error('--exclude-start and --exclude-end must be supplied together')
+    if args.exclude_start is not None and not 1 <= args.exclude_start <= args.exclude_end:
+        parser.error('Invalid excluded interval')
 
+    excluded_contigs = {
+        normalize_contig_name(contig) for contig in args.exclude_contig
+    }
     print("📂 Loading gene annotations from GTF...")
     genes = load_gtf(args.gtf_file)
-
+    if excluded_contigs and args.exclude_start is None:
+        genes = {gene_id: value for gene_id, value in genes.items()
+                 if normalize_contig_name(value['contig']) not in excluded_contigs}
     print(f"\n📂 Extracting Group 2 introners from genotype matrix...")
     introners = extract_group2_introners(args.introner_matrix)
-
+    if excluded_contigs:
+        def excluded(contig, start, end):
+            return normalize_contig_name(contig) in excluded_contigs and (
+                args.exclude_start is None or (start < args.exclude_end and end > args.exclude_start - 1))
+        introners = {key: value for key, value in introners.items()
+                     if not excluded(value['contig'], value['start'], value['end'])}
     print("\n📊 Clustering introners per gene...")
     gene_introner_clusters = {}
     n_genes_with_introners = 0
@@ -413,8 +439,6 @@ def main():
         print(f"   Loaded {chrom}: {len(pyrho_data[chrom])} pyrho windows")
 
     print("\n⚡ Calculating recombination rates...")
-    # For RCC1749 Group2 analysis, we don't have a known mating-type region to exclude
-    # so we'll skip that exclusion step
 
     # We need to add contig info to windows
     for window in all_windows:
@@ -435,6 +459,11 @@ def main():
     windows_df = pd.DataFrame(all_windows)
     windows_df = windows_df[~windows_df['rate'].isna()].copy()
 
+    if excluded_contigs and 'contig' in windows_df.columns:
+        excluded_output = windows_df['contig'].isin(excluded_contigs)
+        if args.exclude_start is not None:
+            excluded_output &= windows_df.start.lt(args.exclude_end) & windows_df.end.gt(args.exclude_start - 1)
+        windows_df = windows_df.loc[~excluded_output].copy()
     print(f"   Calculated rates for {len(windows_df)} windows")
 
     # Summary statistics

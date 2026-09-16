@@ -10,5 +10,6 @@ dependencies:
   - matplotlib
   - seaborn
   - statsmodels     # poisson/negative binomial GLM fitting
+  - pysam
   - patsy           # formula API (Treatment contrasts)
   - pip

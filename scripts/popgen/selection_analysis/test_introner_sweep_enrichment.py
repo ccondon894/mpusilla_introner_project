@@ -68,14 +68,23 @@ def load_callable_segments(
     rows = []
     for row in contigs.itertuples(index=False):
         contig = str(row.contig)
-        length = int(row.length)
+        segment_start = int(getattr(row, "analysis_start", 1))
+        segment_end = int(getattr(row, "analysis_end", row.length))
         if contig == mating_contig:
-            if mating_start > 1:
-                rows.append({"contig": contig, "start": 1, "end": mating_start - 1})
-            if mating_end < length:
-                rows.append({"contig": contig, "start": mating_end + 1, "end": length})
+            left_end = min(segment_end, mating_start - 1)
+            if segment_start <= left_end:
+                rows.append(
+                    {"contig": contig, "start": segment_start, "end": left_end}
+                )
+            right_start = max(segment_start, mating_end + 1)
+            if right_start <= segment_end:
+                rows.append(
+                    {"contig": contig, "start": right_start, "end": segment_end}
+                )
         else:
-            rows.append({"contig": contig, "start": 1, "end": length})
+            rows.append(
+                {"contig": contig, "start": segment_start, "end": segment_end}
+            )
     return pd.DataFrame(rows)
 
 
@@ -96,6 +105,29 @@ def fraction_overlapping(loci: pd.DataFrame, regions: pd.DataFrame) -> float:
             overlap |= (positions >= int(row.start)) & (positions <= int(row.end))
         flags.append(overlap)
     return float(np.concatenate(flags).mean())
+
+
+def restrict_to_callable_segments(
+    loci: pd.DataFrame,
+    segments: pd.DataFrame,
+) -> pd.DataFrame:
+    """Keep loci whose midpoint falls within a scanned, unmasked block."""
+    if loci.empty or segments.empty:
+        return loci.iloc[0:0].copy()
+    keep = pd.Series(False, index=loci.index)
+    for contig, group in loci.groupby("contig", sort=False):
+        contig_segments = segments[segments["contig"] == contig]
+        if contig_segments.empty:
+            continue
+        positions = group["position"].to_numpy(dtype=np.int64)
+        within = np.zeros(len(group), dtype=bool)
+        for segment in contig_segments.itertuples(index=False):
+            within |= (
+                (positions >= int(segment.start))
+                & (positions <= int(segment.end))
+            )
+        keep.loc[group.index] = within
+    return loci.loc[keep].copy()
 
 
 def sample_positions(segments: pd.DataFrame, n: int, rng: np.random.Generator) -> pd.DataFrame:
@@ -314,21 +346,23 @@ def plot_enrichment(region_df: pd.DataFrame, png: str, pdf: str) -> None:
         x = np.arange(len(plot_df))
         bar_colors = [colors[row.locus_class] for row in plot_df.itertuples(index=False)]
         ax.bar(x, plot_df["observed_overlap_fraction"], color=bar_colors, alpha=0.85)
+        null_low = plot_df["perm_mean"] - plot_df["perm_ci_low"]
+        null_high = plot_df["perm_ci_high"] - plot_df["perm_mean"]
         ax.errorbar(
             x,
-            plot_df["observed_overlap_fraction"],
-            yerr=[
-                plot_df["observed_overlap_fraction"] - plot_df["perm_ci_low"],
-                plot_df["perm_ci_high"] - plot_df["observed_overlap_fraction"],
-            ],
-            fmt="none",
+            plot_df["perm_mean"],
+            yerr=[null_low, null_high],
+            fmt="o",
+            color="black",
             ecolor="black",
             capsize=4,
+            label="permutation mean and 95% interval",
         )
         ax.set_xticks(x)
         ax.set_xticklabels([label_map[row] for row in plot_df["locus_class"]], rotation=15)
         ax.set_ylabel("Fraction overlapping sweep regions")
         ax.set_title("Sweep-region overlap vs permutation null")
+        ax.legend(frameon=False)
     fig.tight_layout()
     fig.savefig(png, dpi=250, bbox_inches="tight")
     fig.savefig(pdf, bbox_inches="tight")
@@ -414,6 +448,11 @@ def main() -> None:
         args.mating_start,
         args.mating_end,
     )
+    introner_sets = {
+        label: restrict_to_callable_segments(loci, segments)
+        for label, loci in introner_sets.items()
+    }
+    introns = restrict_to_callable_segments(introns, segments)
 
     region_rows = []
     locus_classes = [

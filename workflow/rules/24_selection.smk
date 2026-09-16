@@ -55,6 +55,15 @@ SWEEP_ACCEPTED_WITHIN_STATUSES = SWEEP_CONFIG.get(
 # SweepFinder2 genome-wide CLR scan parameters
 SF2_DIR = SWEEP_DIR / "sweepfinder"
 SF2_CONFIG = config["params"].get("sweepfinder", {})
+SF2_SITE_CLASSES = SF2_CONFIG.get("site_classes", ["fourfold", "all_snps"])
+SF2_VCFS = {
+    "fourfold": config["paths"]["fourfold_vcf"],
+    "all_snps": config["paths"]["group1_all_sites_vcf"],
+}
+if set(SF2_SITE_CLASSES) - set(SF2_VCFS):
+    raise ValueError(
+        f"Unknown SweepFinder2 site classes: {set(SF2_SITE_CLASSES) - set(SF2_VCFS)}"
+    )
 SF2_GRID_SPACING = SF2_CONFIG.get("grid_spacing", 1000)
 SF2_CLR_PERCENTILE = SF2_CONFIG.get("clr_percentile", 99)
 SF2_REGION_MERGE_GAP = SF2_CONFIG.get("region_merge_gap", 2000)
@@ -62,6 +71,14 @@ SF2_PERMUTATIONS = SF2_CONFIG.get("permutations", 1000)
 SF2_MIN_CALLED_HAPLOTYPES = SF2_CONFIG.get("min_called_haplotypes", 8)
 SF2_FLANK_SIZE = SF2_CONFIG.get("flank_size", 100)
 SF2_SEED = SF2_CONFIG.get("seed", 42)
+SF2_ACCEPTED_FILTERS = SF2_CONFIG.get("accepted_filters", [".", "PASS"])
+SF2_MIN_PYRHO_RATE = float(SF2_CONFIG.get("min_pyrho_rate", 1e-20))
+SF2_PYRHO_MASK_BUFFER = int(SF2_CONFIG.get("pyrho_mask_buffer", 50000))
+SF2_SITE_LABELS = {
+    "fourfold": "4D SNPs",
+    "all_snps": "all SNPs",
+}
+PYRHO_CCMP1545_FILES = sorted(Path(PYRHO_CCMP1545).glob("*.pyrho.out"))
 CCMP1545_GRAPH_FAI = PROJECT_ROOT / f"{config['paths']['references']['ccmp1545_graph']}.fai"
 
 
@@ -318,19 +335,28 @@ rule calculate_fixed_snp_sweep_windows:
 
 rule build_sweepfinder_input:
     """
-    Build SweepFinder2 allele-frequency and uniform grid files from the Group 1
-    4D all-sites VCF (folded polymorphic sites, CCMP1545 reference frame).
+    Build filtered frequency, uniform-grid, and pyrho recombination files for
+    either the Group 1 4D or all-SNP scan.
     """
     input:
-        vcf = config["paths"]["fourfold_vcf"],
-        fai = CCMP1545_GRAPH_FAI
+        vcf = lambda wildcards: SF2_VCFS[wildcards.site_class],
+        fai = CCMP1545_GRAPH_FAI,
+        pyrho_maps = PYRHO_CCMP1545_FILES,
+        script = PROJECT_ROOT / "scripts" / "popgen" / "selection_analysis" / "build_sweepfinder_input.py"
     output:
-        combined_freq = SF2_DIR / "combined.freq",
-        contigs = SF2_DIR / "contigs.tsv",
-        freq_dir = directory(SF2_DIR / "freq"),
-        grid_dir = directory(SF2_DIR / "grid")
+        combined_freq = SF2_DIR / "{site_class}" / "combined.freq",
+        contigs = SF2_DIR / "{site_class}" / "contigs.tsv",
+        masked_intervals = SF2_DIR / "{site_class}" / "pyrho_masked_intervals.tsv",
+        freq_dir = directory(SF2_DIR / "{site_class}" / "freq"),
+        grid_dir = directory(SF2_DIR / "{site_class}" / "grid"),
+        recombination_dir = directory(SF2_DIR / "{site_class}" / "recombination")
     params:
+        output_dir = lambda wildcards: SF2_DIR / wildcards.site_class,
+        pyrho_dir = PYRHO_CCMP1545,
         samples = ",".join(GROUP1_SAMPLES),
+        accepted_filters = ",".join(SF2_ACCEPTED_FILTERS),
+        min_pyrho_rate = SF2_MIN_PYRHO_RATE,
+        pyrho_mask_buffer = SF2_PYRHO_MASK_BUFFER,
         grid_spacing = SF2_GRID_SPACING,
         min_called_haplotypes = SF2_MIN_CALLED_HAPLOTYPES,
         mating_contig = lambda wildcards: f"{REFERENCE}#0#{config['mating_type_region']['scaffold']}",
@@ -338,21 +364,26 @@ rule build_sweepfinder_input:
         mating_end = config["mating_type_region"]["end"],
         exclude_contigs = lambda wildcards: f"{REFERENCE}#0#{config['mating_type_region']['scaffold']}"
     log:
-        SELECTION_LOG_DIR / "build_sweepfinder_input.log"
+        SELECTION_LOG_DIR / "build_sweepfinder_input.{site_class}.log"
     conda: "../envs/sweepfinder.yaml"
     shell:
         """
-        mkdir -p {SF2_DIR}/freq {SF2_DIR}/grid {SELECTION_LOG_DIR}
+        mkdir -p {params.output_dir}/freq {params.output_dir}/grid \
+            {params.output_dir}/recombination {SELECTION_LOG_DIR}
 
-        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/build_sweepfinder_input.py \
+        python {input.script} \
             --vcf {input.vcf} \
             --fai {input.fai} \
+            --pyrho-dir {params.pyrho_dir} \
+            --min-pyrho-rate {params.min_pyrho_rate} \
+            --pyrho-mask-buffer {params.pyrho_mask_buffer} \
             --samples {params.samples} \
-            --output-dir {SF2_DIR} \
+            --output-dir {params.output_dir} \
             --combined-freq {output.combined_freq} \
             --contigs-tsv {output.contigs} \
             --grid-spacing {params.grid_spacing} \
             --min-called-haplotypes {params.min_called_haplotypes} \
+            --accepted-filters '{params.accepted_filters}' \
             --mating-contig {params.mating_contig} \
             --mating-start {params.mating_start} \
             --mating-end {params.mating_end} \
@@ -366,11 +397,11 @@ rule compute_sweepfinder_spectrum:
     Compute the genome-wide empirical folded SFS for SweepFinder2 (-f).
     """
     input:
-        combined_freq = SF2_DIR / "combined.freq"
+        combined_freq = SF2_DIR / "{site_class}" / "combined.freq"
     output:
-        spectrum = SF2_DIR / "spectrum.out"
+        spectrum = SF2_DIR / "{site_class}" / "spectrum.out"
     log:
-        SELECTION_LOG_DIR / "compute_sweepfinder_spectrum.log"
+        SELECTION_LOG_DIR / "compute_sweepfinder_spectrum.{site_class}.log"
     conda: "../envs/sweepfinder.yaml"
     shell:
         """
@@ -380,28 +411,30 @@ rule compute_sweepfinder_spectrum:
 
 rule run_sweepfinder_scan:
     """
-    Run SweepFinder2 CLR scan (-lu) on each contig using pre-computed spectrum.
+    Run recombination-aware SweepFinder2 (-lru) using the pyrho map.
     """
     input:
-        contigs = SF2_DIR / "contigs.tsv",
-        spectrum = SF2_DIR / "spectrum.out",
-        freq_dir = SF2_DIR / "freq",
-        grid_dir = SF2_DIR / "grid"
+        contigs = SF2_DIR / "{site_class}" / "contigs.tsv",
+        spectrum = SF2_DIR / "{site_class}" / "spectrum.out",
+        freq_dir = SF2_DIR / "{site_class}" / "freq",
+        grid_dir = SF2_DIR / "{site_class}" / "grid",
+        recombination_dir = SF2_DIR / "{site_class}" / "recombination"
     output:
-        marker = SF2_DIR / "scan_complete.txt",
-        clr_dir = directory(SF2_DIR / "clr")
+        marker = SF2_DIR / "{site_class}" / "scan_complete.txt",
+        clr_dir = directory(SF2_DIR / "{site_class}" / "clr")
     log:
-        SELECTION_LOG_DIR / "run_sweepfinder_scan.log"
+        SELECTION_LOG_DIR / "run_sweepfinder_scan.{site_class}.log"
     conda: "../envs/sweepfinder.yaml"
     shell:
         """
         mkdir -p {output.clr_dir}
         : > {log}
 
-        tail -n +2 {input.contigs} | while IFS=$'\\t' read -r contig length n_sites n_grid freq_file grid_file; do
+        tail -n +2 {input.contigs} | while IFS=$'\\t' read -r contig length n_sites n_grid freq_file grid_file recombination_file analysis_start analysis_end block_index; do
             safe=$(basename "$freq_file" .freq)
             echo "Scanning $contig ($n_grid grid points, $n_sites polymorphic sites)" >> {log}
-            SweepFinder2 -lu "$grid_file" "$freq_file" {input.spectrum} {output.clr_dir}/${{safe}}.clr >> {log} 2>&1
+            SweepFinder2 -lru "$grid_file" "$freq_file" {input.spectrum} \
+                "$recombination_file" {output.clr_dir}/${{safe}}.clr >> {log} 2>&1
         done
 
         echo "done" > {output.marker}
@@ -413,26 +446,28 @@ rule call_sweep_regions:
     Merge per-contig CLR outputs, call sweep-like regions, and plot Manhattan.
     """
     input:
-        contigs = SF2_DIR / "contigs.tsv",
-        marker = SF2_DIR / "scan_complete.txt",
-        clr_dir = SF2_DIR / "clr"
+        contigs = SF2_DIR / "{site_class}" / "contigs.tsv",
+        marker = SF2_DIR / "{site_class}" / "scan_complete.txt",
+        clr_dir = SF2_DIR / "{site_class}" / "clr",
+        script = PROJECT_ROOT / "scripts" / "popgen" / "selection_analysis" / "call_sweep_regions.py"
     output:
-        clr_tsv = SF2_DIR / "sweepfinder_clr.tsv",
-        regions_bed = SF2_DIR / "sweep_regions.bed",
-        summary = SF2_DIR / "sweep_calling_summary.tsv",
-        plot_png = FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.png",
-        plot_pdf = FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.pdf"
+        clr_tsv = SF2_DIR / "{site_class}" / "sweepfinder_clr.tsv",
+        regions_bed = SF2_DIR / "{site_class}" / "sweep_regions.bed",
+        summary = SF2_DIR / "{site_class}" / "sweep_calling_summary.tsv",
+        plot_png = FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.{site_class}.png",
+        plot_pdf = FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.{site_class}.pdf"
     params:
         clr_percentile = SF2_CLR_PERCENTILE,
-        region_merge_gap = SF2_REGION_MERGE_GAP
+        region_merge_gap = SF2_REGION_MERGE_GAP,
+        site_label = lambda wildcards: SF2_SITE_LABELS[wildcards.site_class]
     log:
-        SELECTION_LOG_DIR / "call_sweep_regions.log"
+        SELECTION_LOG_DIR / "call_sweep_regions.{site_class}.log"
     conda: "../envs/sweepfinder.yaml"
     shell:
         """
         mkdir -p {FIGURES_DIR}/snp_popgen {SELECTION_LOG_DIR}
 
-        python {PROJECT_ROOT}/scripts/popgen/selection_analysis/call_sweep_regions.py \
+        python {input.script} \
             --clr-dir {input.clr_dir} \
             --contigs-tsv {input.contigs} \
             --output-clr {output.clr_tsv} \
@@ -440,6 +475,7 @@ rule call_sweep_regions:
             --output-summary {output.summary} \
             --plot-png {output.plot_png} \
             --plot-pdf {output.plot_pdf} \
+            --site-label '{params.site_label}' \
             --clr-percentile {params.clr_percentile} \
             --region-merge-gap {params.region_merge_gap} \
             > {log} 2>&1
@@ -449,22 +485,23 @@ rule call_sweep_regions:
 rule test_introner_sweep_enrichment:
     """
     Test fixed vs polymorphic Group 1 introner enrichment/depletion in
-    SweepFinder2 sweep regions vs non-introner introns and a permutation null.
+    each SweepFinder2 scan's sweep regions vs non-introner introns and a
+    permutation null.
     """
     input:
-        clr_tsv = SF2_DIR / "sweepfinder_clr.tsv",
-        regions_bed = SF2_DIR / "sweep_regions.bed",
-        contigs = SF2_DIR / "contigs.tsv",
+        clr_tsv = SF2_DIR / "{site_class}" / "sweepfinder_clr.tsv",
+        regions_bed = SF2_DIR / "{site_class}" / "sweep_regions.bed",
+        contigs = SF2_DIR / "{site_class}" / "contigs.tsv",
         introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         non_introner_matrix = RESULTS / "evolution" / "non_introner_introns" / "intron_genotype_matrix.tsv"
     output:
-        region_overlap = SF2_DIR / "introner_sweep_region_overlap.tsv",
-        perlocus = SF2_DIR / "introner_sweep_perlocus.tsv",
-        summary = SF2_DIR / "introner_sweep_enrichment_summary.tsv",
-        enrichment_png = FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.png",
-        enrichment_pdf = FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.pdf",
-        clr_png = FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.png",
-        clr_pdf = FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.pdf"
+        region_overlap = SF2_DIR / "{site_class}" / "introner_sweep_region_overlap.tsv",
+        perlocus = SF2_DIR / "{site_class}" / "introner_sweep_perlocus.tsv",
+        summary = SF2_DIR / "{site_class}" / "introner_sweep_enrichment_summary.tsv",
+        enrichment_png = FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.{site_class}.png",
+        enrichment_pdf = FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.{site_class}.pdf",
+        clr_png = FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.{site_class}.png",
+        clr_pdf = FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.{site_class}.pdf"
     params:
         reference_sample = REFERENCE,
         group1 = ",".join(GROUP1_SAMPLES),
@@ -477,7 +514,7 @@ rule test_introner_sweep_enrichment:
         mating_start = config["mating_type_region"]["start"],
         mating_end = config["mating_type_region"]["end"]
     log:
-        SELECTION_LOG_DIR / "test_introner_sweep_enrichment.log"
+        SELECTION_LOG_DIR / "test_introner_sweep_enrichment.{site_class}.log"
     conda: "../envs/sweepfinder.yaml"
     shell:
         """
@@ -851,7 +888,8 @@ rule compare_recombination_group2:
     """
     input:
         gtf = ANNOTATIONS_DIR / "RCC1749.gtf",
-        introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
+        introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
+        script = PROJECT_ROOT / "scripts" / "popgen" / "recombination_analysis" / "compare_recombination_gene_exonic_group2_introners.py"
     output:
         summary_tsv = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_summary.tsv",
         windows_tsv = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_windows.tsv",
@@ -859,6 +897,7 @@ rule compare_recombination_group2:
         png = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated.png"
     params:
         pyrho_dir = PYRHO_RCC1749,
+        exclude_contig = config["mating_type_region"]["group2"]["contig"],
         window_size = 5000,
         merge_distance = 10000,
         output_prefix = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated"
@@ -869,10 +908,12 @@ rule compare_recombination_group2:
         """
         mkdir -p {RECOMB_DIR}
 
-        python {PROJECT_ROOT}/scripts/popgen/recombination_analysis/compare_recombination_gene_exonic_group2_introners.py \
+        python {input.script} \
             --pyrho_dir {params.pyrho_dir} \
             --gtf_file {input.gtf} \
             --introner_matrix {input.introner_matrix} \
+            --exclude-contig '{params.exclude_contig}' \
+            --exclude-start 25000 --exclude-end 2148000 \
             --window_size {params.window_size} \
             --merge_distance {params.merge_distance} \
             --output_prefix {params.output_prefix} \
@@ -917,9 +958,9 @@ rule plot_recombination_violin_categories:
     Population 2 exonic background, and Population 2 all introners.
     """
     input:
-        group1_all_windows = RECOMB_DIR / "gene_exonic_introners_all_5kb_updated_windows.tsv",
-        group1_polymorphic_windows = RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated_windows.tsv",
-        group2_windows = RECOMB_DIR / "gene_exonic_group2_introners_5kb_updated_windows.tsv",
+        group1_all_windows = RECOMB_DIR / "common_background/group1.comparison_windows.tsv",
+        group1_polymorphic_windows = RECOMB_DIR / "common_background/group1.comparison_windows.tsv",
+        group2_windows = RECOMB_DIR / "common_background/group2.comparison_windows.tsv",
         color_guide = PROJECT_ROOT / "master_figure_color_guide.tsv",
         script = PROJECT_ROOT / "scripts" / "popgen" / "recombination_analysis" / "plot_recombination_violin_categories.py"
     output:
@@ -973,11 +1014,26 @@ rule selection_complete:
         SFS_DIR / "afs_by_class.tsv",
         FIGURES_DIR / "snp_popgen" / "afs_by_class.pdf",
         # SweepFinder2
-        SF2_DIR / "sweepfinder_clr.tsv",
-        SF2_DIR / "sweep_regions.bed",
-        SF2_DIR / "introner_sweep_enrichment_summary.tsv",
-        FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.png",
-        FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.png",
+        expand(
+            str(SF2_DIR / "{site_class}" / "sweepfinder_clr.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "sweep_regions.bed"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "introner_sweep_enrichment_summary.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.{site_class}.png"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.{site_class}.png"),
+            site_class=SF2_SITE_CLASSES,
+        ),
 
 
 rule basic_popgen_only:
@@ -1051,22 +1107,99 @@ rule fixed_snp_sweep_control:
 
 rule sweepfinder_sweeps:
     """
-    Target: SweepFinder2 genome-wide CLR scan and introner enrichment test.
+    Target: recombination-aware 4D and all-SNP SweepFinder2 scans plus
+    introner enrichment tests.
     """
     input:
-        SF2_DIR / "combined.freq",
-        SF2_DIR / "contigs.tsv",
-        SF2_DIR / "spectrum.out",
-        SF2_DIR / "scan_complete.txt",
-        SF2_DIR / "sweepfinder_clr.tsv",
-        SF2_DIR / "sweep_regions.bed",
-        SF2_DIR / "sweep_calling_summary.tsv",
-        SF2_DIR / "introner_sweep_region_overlap.tsv",
-        SF2_DIR / "introner_sweep_perlocus.tsv",
-        SF2_DIR / "introner_sweep_enrichment_summary.tsv",
-        FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.png",
-        FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.pdf",
-        FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.png",
-        FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.pdf",
-        FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.png",
-        FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.pdf"
+        expand(
+            str(SF2_DIR / "{site_class}" / "combined.freq"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "contigs.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "spectrum.out"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "scan_complete.txt"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "sweepfinder_clr.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "sweep_regions.bed"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "sweep_calling_summary.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "introner_sweep_region_overlap.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "introner_sweep_perlocus.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "introner_sweep_enrichment_summary.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.{site_class}.png"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.{site_class}.pdf"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.{site_class}.png"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "introner_sweep_enrichment.{site_class}.pdf"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.{site_class}.png"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "introner_sweep_clr_comparison.{site_class}.pdf"),
+            site_class=SF2_SITE_CLASSES,
+        )
+
+
+rule sweepfinder_scans:
+    """
+    Target: filtered, pyrho-aware SweepFinder2 scans for 4D and all SNPs,
+    without downstream introner enrichment tests.
+    """
+    input:
+        expand(
+            str(SF2_DIR / "{site_class}" / "sweepfinder_clr.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "sweep_regions.bed"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(SF2_DIR / "{site_class}" / "sweep_calling_summary.tsv"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.{site_class}.png"),
+            site_class=SF2_SITE_CLASSES,
+        ),
+        expand(
+            str(FIGURES_DIR / "snp_popgen" / "sweepfinder_manhattan.{site_class}.pdf"),
+            site_class=SF2_SITE_CLASSES,
+        )

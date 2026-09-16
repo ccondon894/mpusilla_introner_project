@@ -132,7 +132,10 @@ rule visualize_demography:
             --params {input.params} \
             --target-bed {input.target_bed} \
             --mutation-rate 9.8e-10 \
-            --ancestral-time-factor 10 \
+            --ancestral-time-factor 40 \
+            --figure-width 6.5 \
+            --figure-height 2.35 \
+            --font-size 10 \
             --color-guide {PROJECT_ROOT}/master_figure_color_guide.tsv \
             --output_pdf {output.pdf} \
             --output_png {output.png} \
@@ -192,6 +195,9 @@ rule plot_2d_afs:
             --vcf {input.vcf} \
             --group1 {params.group1_str} \
             --group2 {params.group2_str} \
+            --figure-width 6.5 \
+            --figure-height 2.7 \
+            --font-size 10 \
             --output_pdf {output.pdf} \
             --output_png {output.png} \
             2> {log}

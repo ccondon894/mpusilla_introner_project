@@ -24,11 +24,33 @@ def parse_arguments():
     parser.add_argument('--output', required=True)
     parser.add_argument('--proportions', action='store_true',
                        help='Use log frequency instead of absolute counts')
+    parser.add_argument('--fig-width', type=float, default=6.0,
+                        help='Figure width in inches (default: 6).')
+    parser.add_argument('--fig-height', type=float, default=4.5,
+                        help='Figure height in inches (default: 4.5).')
+    parser.add_argument('--axis-fontsize', type=float, default=14.0,
+                        help='Axis-label font size in points (default: 14).')
+    parser.add_argument('--tick-fontsize', type=float, default=12.0,
+                        help='Axis-tick font size in points (default: 12).')
+    parser.add_argument('--legend-fontsize', type=float, default=7.0,
+                        help='Legend text size in points (default: 7).')
+    parser.add_argument('--legend-title-fontsize', type=float,
+                        help='Legend-title size in points (default: legend size).')
+    parser.add_argument('--bar-edgewidth', type=float, default=1.2,
+                        help='Bar-outline width in points (default: 1.2).')
+    parser.add_argument('--full-border', action='store_true',
+                        help='Draw all four axes spines around the plotting area.')
     return parser.parse_args()
 
 
 def plot_introner_family_distribution(df, outfile, group1_samples, group2_samples,
-                                      use_proportions=False):
+                                      use_proportions=False, fig_width=6.0,
+                                      fig_height=4.5, axis_fontsize=14.0,
+                                      tick_fontsize=12.0,
+                                      legend_fontsize=7.0,
+                                      legend_title_fontsize=None,
+                                      bar_edgewidth=1.2,
+                                      full_border=False):
     """
     Generate bar charts showing counts or proportions of present introners
     by family across samples. Families are on the x-axis with samples grouped
@@ -122,7 +144,7 @@ def plot_introner_family_distribution(df, outfile, group1_samples, group2_sample
     print()
 
     # Plot
-    fig, ax = plt.subplots(figsize=(6, 4.5))
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
     x = np.arange(len(top_families))
     width = 0.8 / len(samples)
@@ -147,27 +169,32 @@ def plot_introner_family_distribution(df, outfile, group1_samples, group2_sample
         positions = x + (i - len(samples)/2 + 0.5) * width
         color = sample_colors[sample]
         ax.bar(positions, plot_data.loc[sample], width=width, label=sample,
-               alpha=0.8, color=color, edgecolor='black', linewidth=1.2)
+               alpha=0.8, color=color, edgecolor='black',
+               linewidth=bar_edgewidth)
 
-    ax.set_xlabel('Introner Family', fontsize=14)
+    ax.set_xlabel('Introner Family', fontsize=axis_fontsize)
 
     if use_proportions:
-        ax.set_ylabel('Log(Frequency)', fontsize=14)
+        ax.set_ylabel('Log(Frequency)', fontsize=axis_fontsize)
         ax.set_yscale('log')
         ax.set_ylim(bottom=1)
     else:
-        ax.set_ylabel('Number of Present Introners', fontsize=14)
+        ax.set_ylabel('Number of Present Introners', fontsize=axis_fontsize)
         ax.set_ylim(bottom=0)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(top_families, rotation=0, ha='center', fontsize=12)
-    ax.tick_params(labelsize=12)
+    ax.set_xticklabels(top_families, rotation=0, ha='center',
+                       fontsize=tick_fontsize)
+    ax.tick_params(labelsize=tick_fontsize)
 
     ax.grid(False)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    ax.spines['top'].set_visible(full_border)
+    ax.spines['right'].set_visible(full_border)
 
-    ax.legend(title="Sample", fontsize=7, title_fontsize=7, ncol=3,
+    if legend_title_fontsize is None:
+        legend_title_fontsize = legend_fontsize
+    ax.legend(title="Sample", fontsize=legend_fontsize,
+              title_fontsize=legend_title_fontsize, ncol=3,
               frameon=True, edgecolor='black', loc='upper right')
 
     plt.tight_layout()
@@ -183,7 +210,13 @@ def main():
     df = df[df["family"] != -1]
     plot_introner_family_distribution(
         df, args.output, args.group1_samples, args.group2_samples,
-        use_proportions=args.proportions)
+        use_proportions=args.proportions, fig_width=args.fig_width,
+        fig_height=args.fig_height, axis_fontsize=args.axis_fontsize,
+        tick_fontsize=args.tick_fontsize,
+        legend_fontsize=args.legend_fontsize,
+        legend_title_fontsize=args.legend_title_fontsize,
+        bar_edgewidth=args.bar_edgewidth,
+        full_border=args.full_border)
 
 
 if __name__ == "__main__":

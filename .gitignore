@@ -74,9 +74,25 @@ __pycache__/
 docs/
 completed.md
 tasks.md
+workflow/analysis_promotions.md
+workflow/expression_analyses.md
+
 
 # scratch analysis
 analysis/
 
 # Agents
 AGENTS.md
+
+# Retired workflows: preserve local copies without tracking them
+/scripts/microc/
+/scripts/genotyping/qa
+/scripts/genome_alignment/audit_mt_alignment.py
+/scripts/maintenance/
+/scripts/random_forest/
+/workflow/rules/50_microc.smk
+/workflow/rules/60_random_forest_classifier.smk
+/workflow/envs/microc.yaml
+/workflow/envs/microc_qc.yaml
+/workflow/envs/microc_tracks.yaml
+/workflow/envs/random_forest.yaml

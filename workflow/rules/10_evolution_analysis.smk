@@ -345,7 +345,8 @@ rule introner_body_call_variants:
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
     output:
         vcf = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.vcf.gz",
-        filt_vcf = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz"
+        filt_vcf = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz",
+        filt_index = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz.tbi"
     wildcard_constraints:
         sample = "|".join(EVO_NON_REF_SAMPLES)
     shell:
@@ -363,6 +364,7 @@ rule build_introner_body_consensus:
     """
     input:
         filt_vcf = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz",
+        filt_index = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz.tbi",
         bed = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.bed",
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
     output:

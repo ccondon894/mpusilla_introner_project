@@ -32,6 +32,28 @@ def parse_args():
     parser.add_argument("--output-png", required=True)
     parser.add_argument("--output-tsv", required=True)
     parser.add_argument("--summary", required=True)
+    parser.add_argument("--fig-width", type=float, default=12.0,
+                        help="Figure width in inches (default: 12).")
+    parser.add_argument("--fig-height", type=float, default=3.0,
+                        help="Figure height in inches (default: 3).")
+    parser.add_argument("--axis-fontsize", type=float, default=12.0,
+                        help="Axis-label font size in points (default: 12).")
+    parser.add_argument("--tick-fontsize", type=float, default=10.0,
+                        help="Axis-tick font size in points (default: 10).")
+    parser.add_argument("--annotation-fontsize", type=float, default=10.0,
+                        help="Heatmap cell-label font size in points (default: 10).")
+    parser.add_argument("--colorbar-fontsize", type=float, default=10.0,
+                        help="Colorbar label and tick font size in points (default: 10).")
+    parser.add_argument(
+        "--fill-heatmap-height",
+        action="store_true",
+        help="Allow rectangular cells so the heatmap fills the colorbar height.",
+    )
+    parser.add_argument(
+        "--match-colorbar-height",
+        action="store_true",
+        help="Size the colorbar to the heatmap height while retaining square cells.",
+    )
     parser.add_argument(
         "--drop-absent-monomorphic",
         action="store_true",
@@ -144,33 +166,59 @@ def write_summary(summary_path, spectrum, used, skipped):
                     )
 
 
-def plot_heatmap(spectrum, group1_n, group2_n, output_file):
+def plot_heatmap(spectrum, group1_n, group2_n, output_file, fig_width=12.0,
+                 fig_height=3.0, axis_fontsize=12.0, tick_fontsize=10.0,
+                 annotation_fontsize=10.0, colorbar_fontsize=10.0,
+                 fill_heatmap_height=False, match_colorbar_height=False):
     log_spectrum = np.log10(spectrum + 1)
     annot = spectrum.astype(str)
 
-    plt.figure(figsize=(12, 3))
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax = sns.heatmap(
         log_spectrum,
+        ax=ax,
         annot=annot,
         fmt="",
         cmap="viridis",
+        cbar=not match_colorbar_height,
         cbar_kws={"label": "log10(count + 1)"},
         linewidths=0.5,
         linecolor="white",
         xticklabels=list(range(group1_n + 1)),
         yticklabels=list(range(group2_n + 1)),
-        square=True,
+        square=not fill_heatmap_height,
+        annot_kws={"fontsize": annotation_fontsize},
     )
 
-    ax.set_xlabel("Group 1 introner-present count", fontsize=12)
-    ax.set_ylabel("Group 2 introner-present count", fontsize=12)
+    ax.set_xlabel("Population 1\nintroner count", fontsize=axis_fontsize)
+    ax.set_ylabel("Population 2\nintroner count", fontsize=axis_fontsize)
     ax.set_title("")
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=0)
-    ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=0,
+                       fontsize=tick_fontsize)
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0,
+                       fontsize=tick_fontsize)
+    if match_colorbar_height:
+        # Reserve space for a colorbar and then match its vertical bounds to
+        # the square-cell heatmap after layout has finalized the axes box.
+        fig.tight_layout(rect=(0, 0, 0.90, 1))
+        fig.canvas.draw()
+        heatmap_box = ax.get_position()
+        colorbar_ax = fig.add_axes([
+            heatmap_box.x1 + 0.025,
+            heatmap_box.y0,
+            0.020,
+            heatmap_box.height,
+        ])
+        colorbar = fig.colorbar(ax.collections[0], cax=colorbar_ax)
+    else:
+        colorbar = ax.collections[0].colorbar
+    colorbar.set_label("log10(count + 1)", fontsize=colorbar_fontsize)
+    colorbar.ax.tick_params(labelsize=colorbar_fontsize)
     ax.invert_yaxis()
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    plt.close()
+    if not match_colorbar_height:
+        fig.tight_layout()
+    fig.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 def main():
@@ -189,10 +237,20 @@ def main():
 
     write_spectrum_tsv(spectrum, args.output_tsv)
     write_summary(args.summary, spectrum, used, skipped)
+    plot_kwargs = {
+        "fig_width": args.fig_width,
+        "fig_height": args.fig_height,
+        "axis_fontsize": args.axis_fontsize,
+        "tick_fontsize": args.tick_fontsize,
+        "annotation_fontsize": args.annotation_fontsize,
+        "colorbar_fontsize": args.colorbar_fontsize,
+        "fill_heatmap_height": args.fill_heatmap_height,
+        "match_colorbar_height": args.match_colorbar_height,
+    }
     plot_heatmap(spectrum, len(args.group1_samples), len(args.group2_samples),
-                 args.output_pdf)
+                 args.output_pdf, **plot_kwargs)
     plot_heatmap(spectrum, len(args.group1_samples), len(args.group2_samples),
-                 args.output_png)
+                 args.output_png, **plot_kwargs)
 
     print(f"Used {used} loci")
     for reason, count in skipped.items():

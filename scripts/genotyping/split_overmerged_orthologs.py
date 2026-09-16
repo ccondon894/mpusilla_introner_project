@@ -57,12 +57,62 @@ def normalize_family(value):
         return text
 
 
+def build_used_coords_per_sample(matrix_rows):
+    """Reserve every physical locus already present in a matrix.
+
+    The returned mapping is intentionally shared by all ortholog groups in a
+    split pass.  Lost-introner recovery may therefore claim a previously
+    unrepresented BED locus once, but it cannot copy a locus that is already
+    owned by another group or was recovered earlier in the same pass.
+    """
+    used_coords_per_sample = defaultdict(set)
+    for row in matrix_rows:
+        if row.get('presence') != '1':
+            continue
+        coord = (row['contig'], int(row['start']), int(row['end']))
+        used_coords_per_sample[row['sample']].add(coord)
+    return used_coords_per_sample
+
+
+def duplicate_present_loci(matrix_rows):
+    """Return physical presence loci assigned to more than one matrix row."""
+    rows_by_locus = defaultdict(list)
+    for row in matrix_rows:
+        if row.get('presence') != '1':
+            continue
+        locus = (row['sample'], row['contig'],
+                 int(row['start']), int(row['end']))
+        rows_by_locus[locus].append(row.get('ortholog_id', ''))
+    return {
+        locus: ortholog_ids
+        for locus, ortholog_ids in rows_by_locus.items()
+        if len(ortholog_ids) > 1
+    }
+
+
+def assert_unique_present_loci(matrix_rows, context='matrix'):
+    """Fail fast when a physical present locus has multiple owners."""
+    duplicates = duplicate_present_loci(matrix_rows)
+    if not duplicates:
+        return
+
+    examples = []
+    for locus, ortholog_ids in list(sorted(duplicates.items()))[:5]:
+        sample, contig, start, end = locus
+        examples.append(
+            f"{sample}:{contig}:{start}-{end} -> {','.join(ortholog_ids)}")
+    raise ValueError(
+        f"{context} contains {len(duplicates)} duplicated physical presence "
+        f"loci. Examples: {'; '.join(examples)}")
+
+
 def get_locus_key(fp):
     """Build a hybrid comparison key from a fingerprint dict.
 
     Returns a ('hybrid', aa_ctx_or_none, legacy_key_or_none) tuple.
-    Two hybrid keys match if EITHER their aa contexts match OR their
-    legacy codon/intron keys are compatible.
+    Amino-acid context is authoritative for mixed CDS/intron comparisons when
+    both contexts are available. The legacy exon/intron-number fallback is
+    retained when either context is unavailable.
     """
     aa_ctx = fp.get('flanking_aa_context', '') or None
 
@@ -137,8 +187,9 @@ def keys_within_tolerance(k1, k2, codon_tolerance,
     """Check whether two hybrid locus keys point to the same biological locus.
 
     Each key is a ('hybrid', aa_ctx, legacy_key) tuple. Two keys match if
-    either the aa contexts match via sliding window OR the legacy codon/
-    intron keys are compatible.
+    either the aa contexts match via sliding window OR the legacy codon/intron
+    keys are compatible, provided a mixed annotation does not have explicit,
+    contradictory AA contexts.
     """
     if k1 is None or k2 is None:
         return False
@@ -150,10 +201,15 @@ def keys_within_tolerance(k1, k2, codon_tolerance,
     _, aa1, legacy1 = k1
     _, aa2, legacy2 = k2
 
-    # Try aa context match first
+    # Explicitly conflicting AA contexts may not be overridden by the
+    # permissive exon N <-> intron N/N-1 fallback in mixed CDS/intron cases.
+    # Keep the legacy rescue when either AA context is unavailable.
     if aa1 and aa2:
         if aa_contexts_match(aa1, aa2, max_mismatches=aa_mismatch_tolerance):
             return True
+        if legacy1 is not None and legacy2 is not None:
+            if {legacy1[0], legacy2[0]} == {'cds', 'intron'}:
+                return False
 
     # Fall back to legacy key match
     return _legacy_keys_match(legacy1, legacy2, codon_tolerance)
@@ -728,7 +784,8 @@ def split_group_by_existing_family(oid, row_indices, matrix_rows):
 
 def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
                                 fps_by_sample_gene, beds_by_coord, tandems,
-                                cds_by_sample_gene, codon_tolerance):
+                                cds_by_sample_gene, codon_tolerance,
+                                used_coords_per_sample=None):
     """Split an ortholog group, recovering lost introners.
 
     Returns a list of (new_id, [matrix_rows]) tuples. Each tuple represents
@@ -849,8 +906,12 @@ def split_group_with_recovery(oid, row_indices, matrix_rows, fps_by_coord,
             all_samples.append(s)
             sample_to_template[s] = matrix_rows[idx]
 
-    # Step 6: Track which BED entries are already assigned to a sub-group
-    used_coords_per_sample = defaultdict(set)
+    # Step 6: Track BED entries globally across the whole split pass.  The
+    # consolidated resolver and standalone CLI pre-populate this mapping from
+    # every presence=1 row before processing any group.  Keep a local fallback
+    # for external callers, while the workflow always supplies the global map.
+    if used_coords_per_sample is None:
+        used_coords_per_sample = defaultdict(set)
 
     # First pass: assign existing presence=1 rows to their cluster
     sub_group_rows = [[] for _ in clusters]
@@ -1024,6 +1085,12 @@ def main():
             matrix_rows.append(row)
             ortholog_groups[row['ortholog_id']].append(idx)
     print(f"  {len(matrix_rows)} rows in {len(ortholog_groups)} ortholog groups")
+    assert_unique_present_loci(matrix_rows, context='input matrix')
+
+    # Reserve all existing physical presences before the first group is
+    # processed.  Initializing this progressively would allow an early group
+    # to steal a locus from an owner group that sorts later.
+    used_coords_per_sample = build_used_coords_per_sample(matrix_rows)
 
     # Process each group
     n_split = 0
@@ -1053,7 +1120,8 @@ def main():
         else:
             result = split_group_with_recovery(
                 oid, row_indices, matrix_rows, fps_by_coord, fps_by_sample_gene,
-                beds_by_coord, tandems, cds_by_sample_gene, args.codon_tolerance)
+                beds_by_coord, tandems, cds_by_sample_gene,
+                args.codon_tolerance, used_coords_per_sample)
 
         if result is None:
             # No split — keep original rows
@@ -1120,6 +1188,8 @@ def main():
     print(f"  Sub-groups with tandem flag:     {n_tandem_flagged}")
     print(f"  Total output rows:               {len(output_rows)}")
     print(f"  (Original matrix rows: {len(matrix_rows)})")
+
+    assert_unique_present_loci(output_rows, context='split output matrix')
 
     # Write output matrix
     out_fieldnames = list(fieldnames)

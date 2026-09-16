@@ -25,6 +25,7 @@ MATING_CONTIG = "CCMP1545#0#scaffold_2"
 MATING_START = 49808
 MATING_END = 1730591
 PRIMARY_CLASSES = ("fixed_present", "polymorphic")
+LOW_IDENTITY_STATUS = "low_identity"
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,6 +55,8 @@ def parse_args() -> argparse.Namespace:
 
 def read_matrix(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t")
+    if "within_group_status" not in df.columns:
+        raise ValueError("Genotype matrix is missing required within_group_status column.")
     numeric = [
         "start",
         "end",
@@ -131,6 +134,14 @@ def candidate_loci(
     one_per_ortholog = one_per_ortholog[
         one_per_ortholog["analysis_family"].isin(families)
         & ~one_per_ortholog["ortholog_id"].isin(mt_orthologs)
+        & (
+            one_per_ortholog["within_group_status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            != LOW_IDENTITY_STATUS
+        )
     ].copy()
     one_per_ortholog["analysis_class"] = one_per_ortholog.apply(
         lambda row: classify_group(row, group_name), axis=1
@@ -617,13 +628,23 @@ def plot_results(per_locus: pd.DataFrame, path: Path) -> None:
     plt.close(fig)
 
 
-def validate(per_locus: pd.DataFrame, top_families: list[int]) -> None:
+def validate(
+    per_locus: pd.DataFrame,
+    top_families: list[int],
+    low_identity_orthologs: set[str],
+) -> None:
     if per_locus.empty:
         raise ValueError("No per-locus rows were produced.")
     if not set(per_locus["family"].unique()).issubset(set(top_families)):
         raise ValueError("Output contains families outside the selected top families.")
     if (per_locus["body_len_min"] <= 0).any() or (per_locus["body_len_max"] <= 0).any():
         raise ValueError("Output contains non-positive body lengths.")
+    retained_low_identity = set(per_locus["ortholog_id"]) & low_identity_orthologs
+    if retained_low_identity:
+        raise ValueError(
+            "Output contains low-identity orthologs: "
+            + ", ".join(sorted(retained_low_identity))
+        )
     group1 = per_locus[per_locus["analysis_scope"] == "group1_primary"]
     fixed = group1[group1["analysis_class"] == "fixed_present"]
     poly = group1[group1["analysis_class"] == "polymorphic"]
@@ -643,6 +664,17 @@ def main() -> None:
         raise ValueError("--permutations must be at least 1.")
 
     df = read_matrix(args.genotype_matrix)
+    low_identity_orthologs = set(
+        df.loc[
+            df["within_group_status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .eq(LOW_IDENTITY_STATUS),
+            "ortholog_id",
+        ]
+    )
     mt_orthologs = mating_type_orthologs(df)
     top_families = top_present_families(df, args.top_families)
     all_samples = sorted(set(args.group1_samples + args.group2_samples))
@@ -681,7 +713,7 @@ def main() -> None:
         )
 
     per_locus = pd.DataFrame(rows)
-    validate(per_locus, top_families)
+    validate(per_locus, top_families, low_identity_orthologs)
     summary = summarize(per_locus)
     rng = np.random.default_rng(args.seed)
     test_df = tests(per_locus, rng, args.permutations)
@@ -695,6 +727,10 @@ def main() -> None:
     plot_results(per_locus, args.plot)
 
     print(f"Top families: {','.join(map(str, top_families))}")
+    print(
+        "Excluded low-identity orthologs from body pi analysis: "
+        f"{len(low_identity_orthologs)} matrix-wide"
+    )
     print(f"Wrote {len(per_locus)} per-locus rows to {args.per_locus}")
     print(f"Wrote summary to {args.summary}")
     print(f"Wrote tests to {args.tests}")

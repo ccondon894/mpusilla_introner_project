@@ -29,6 +29,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plot-png", required=True)
     parser.add_argument("--plot-pdf", required=True)
     parser.add_argument(
+        "--site-label",
+        default="4D SNPs",
+        help="Site class shown in the Manhattan-plot title.",
+    )
+    parser.add_argument(
         "--clr-percentile",
         type=float,
         default=99.0,
@@ -164,6 +169,7 @@ def plot_manhattan(
     introners: pd.DataFrame,
     png: str,
     pdf: str,
+    site_label: str,
 ) -> None:
     fig, ax = plt.subplots(figsize=(14, 5))
     if clr_df.empty:
@@ -202,7 +208,7 @@ def plot_manhattan(
     ax.set_xlabel("Genome position (concatenated contigs)")
     ax.set_ylabel("SweepFinder2 CLR")
     ax.set_title(
-        "Group 1 4D SweepFinder2 scan (folded SFS)\n"
+        f"Group 1 SweepFinder2 scan: {site_label} (folded SFS, pyrho map)\n"
         "Note: within-G1 substructure (F_ST ~ 0.62) may inflate CLR peaks"
     )
     if pd.notna(threshold):
@@ -257,7 +263,15 @@ def main() -> None:
     summary.to_csv(args.output_summary, sep="\t", index=False)
 
     introners = load_introner_rug(args.introner_bed)
-    plot_manhattan(clr_df, regions_df, threshold, introners, args.plot_png, args.plot_pdf)
+    plot_manhattan(
+        clr_df,
+        regions_df,
+        threshold,
+        introners,
+        args.plot_png,
+        args.plot_pdf,
+        args.site_label,
+    )
 
     print(f"Merged {len(clr_df)} CLR grid points across {clr_df['contig'].nunique() if not clr_df.empty else 0} contigs")
     print(f"CLR threshold (p{args.clr_percentile}): {threshold}")

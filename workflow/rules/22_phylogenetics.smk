@@ -199,6 +199,9 @@ rule plot_phylogenetic_tree:
             -i {input.treefile} \
             -o {FIGURES_DIR}/snp_popgen/phylogenetic_tree \
             --color-guide {PROJECT_ROOT}/master_figure_color_guide.tsv \
+            --width 720 \
+            --height 330 \
+            --tip-font-size 14 \
             2> {log}
         """
 

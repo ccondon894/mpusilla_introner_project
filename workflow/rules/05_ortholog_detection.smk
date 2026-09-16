@@ -1,10 +1,3 @@
-# Pipeline Overview:
-# - Phase 0: GTF to BED conversion for gene annotations
-# - Phase 1A: Synteny mapping (upstream/downstream gene context)
-# - Phase 1B: Flank extraction and BWA indexing
-# - Phase 1C: Initial ortholog pairing (standard alignments)
-# - Phase 2: Rescue alignments for Group1↔Group2 pairs
-# - Final: Build genotype matrix, fix orientations, resolve groups, annotate
 
 import os
 from pathlib import Path
@@ -456,9 +449,14 @@ rule resolve_ortholog_groups:
 
     Replaces the former classify/split/reclassify/cross-split/reclassify/
     sequence-comparison chain. Iterates classification and splitting until
-    stable, then refines statuses with body-sequence identity.
+    stable, then refines statuses with body-sequence identity. Mixed CDS/intron
+    fingerprints use evidence-guarded matching: explicit conflicting amino-acid
+    contexts cannot be rescued by exon/intron-number compatibility.
     """
     input:
+        resolver_script = PROJECT_ROOT / "scripts" / "genotyping" / "resolve_ortholog_groups.py",
+        classifier_script = PROJECT_ROOT / "scripts" / "genotyping" / "classify_sharing_status.py",
+        splitter_script = PROJECT_ROOT / "scripts" / "genotyping" / "split_overmerged_orthologs.py",
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.oriented.tsv",
         locus_group_members = GENOTYPING_DIR / "locus_group_members.tsv",
         fingerprints = expand(
@@ -489,7 +487,7 @@ rule resolve_ortholog_groups:
         cross_threshold = 0.60
     shell:
         """
-        python {PROJECT_ROOT}/scripts/genotyping/resolve_ortholog_groups.py \
+        python {input.resolver_script} \
             --matrix {input.genotype_matrix} \
             --locus-group-members {input.locus_group_members} \
             --fingerprints {input.fingerprints} \

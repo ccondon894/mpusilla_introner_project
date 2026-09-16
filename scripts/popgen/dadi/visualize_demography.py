@@ -8,12 +8,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.offsetbox import AnnotationBbox, TextArea, VPacker
+from matplotlib.patches import FancyArrowPatch
 import demes
-
-try:
-    import demesdraw
-except ImportError:
-    demesdraw = None
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = SCRIPT_DIR.parents[1]
@@ -157,24 +154,62 @@ def deme_plot_size(graph, name):
     return deme.epochs[0].start_size
 
 
-def plotting_positions(graph, daughter_ancestor_gap_factor):
-    """Position demes from edge-to-edge gaps instead of fixed midpoints."""
-    pop1_size = deme_plot_size(graph, "Population_1")
-    pop2_size = deme_plot_size(graph, "Population_2")
-    ancestral_size = deme_plot_size(graph, "ancestral")
-    gap = max(pop1_size, pop2_size, ancestral_size) * daughter_ancestor_gap_factor
+def scaled_tube_half_height(size, max_size, min_height=0.11, max_height=0.32):
+    """Map population size to a compact, readable horizontal tube height."""
+    return min_height + (max_height - min_height) * np.sqrt(size / max_size)
 
-    pop1_half = pop1_size / 2
-    pop2_half = pop2_size / 2
-    ancestral_half = ancestral_size / 2
-    ancestral_mid = pop1_half + gap + ancestral_half
-    pop2_mid = ancestral_mid + ancestral_half + gap + pop2_half
 
-    return {
-        "Population_1": 0.0,
-        "ancestral": ancestral_mid,
-        "Population_2": pop2_mid,
-    }
+def scientific_mathtext(value):
+    """Format a positive value compactly for a Matplotlib math-text label."""
+    exponent = int(np.floor(np.log10(value)))
+    coefficient = value / (10 ** exponent)
+    return rf"{coefficient:.2f}\times10^{{{exponent}}}"
+
+
+def add_migration_arrows(
+    ax,
+    split_time,
+    upper_y,
+    lower_y,
+    migration_rate,
+    colors,
+    font_size,
+):
+    """Show symmetric post-split migration without crowding the short panel."""
+    migration_time = np.sqrt(split_time)
+    upper_edge = upper_y - 0.18
+    lower_edge = lower_y + 0.18
+
+    arrows = (
+        (migration_time * 1.18, upper_edge, lower_edge, colors["Population_1"]),
+        (migration_time / 1.18, lower_edge, upper_edge, colors["Population_2"]),
+    )
+    for x, start_y, end_y, color in arrows:
+        ax.add_patch(
+            FancyArrowPatch(
+                (x, start_y),
+                (x, end_y),
+                arrowstyle="-|>",
+                mutation_scale=8,
+                linewidth=1.0,
+                color=color,
+                alpha=0.9,
+                zorder=4,
+            )
+        )
+
+    ax.text(
+        migration_time,
+        0,
+        "symmetric migration\n"
+        rf"($\lambda={scientific_mathtext(migration_rate)}$ generation$^{{-1}}$)",
+        ha="center",
+        va="center",
+        fontsize=font_size - 1.5,
+        color="#444444",
+        bbox=dict(facecolor="white", edgecolor="none", pad=1.5, alpha=0.9),
+        zorder=5,
+    )
 
 
 def visualize_demography(
@@ -183,12 +218,13 @@ def visualize_demography(
     output_pdf,
     output_png,
     color_guide_path,
-    daughter_ancestor_gap_factor,
+    figure_width,
+    figure_height,
+    font_size,
 ):
-    """Create visualization of the demographic model"""
+    """Create a compact, left-to-right demographic model schematic."""
 
-    # Create the plot
-    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    fig, ax = plt.subplots(1, 1, figsize=(figure_width, figure_height))
 
     guide = load_color_guide(color_guide_path)
 
@@ -199,76 +235,138 @@ def visualize_demography(
         "Population_2": get_color("Population 2", guide),
     }
 
-    split_time = next(deme.start_time for deme in graph.demes if deme.name == "Population_1")
+    split_time = next(
+        deme.start_time for deme in graph.demes if deme.name == "Population_1"
+    )
     top_time = graph.metadata.get("plot_ancestral_start_time", split_time * 10)
-    if demesdraw is not None:
-        demesdraw.tubes(
-            graph, 
-            ax=ax, 
-            log_time=True, 
-            colours=colors, 
-            positions=plotting_positions(graph, daughter_ancestor_gap_factor),
-            labels="xticks-mid",
-            num_lines_per_migration=2
+    sizes = {name: deme_plot_size(graph, name) for name in colors}
+    max_size = max(sizes.values())
+    half_heights = {
+        name: scaled_tube_half_height(size, max_size)
+        for name, size in sizes.items()
+    }
+    centers = {"ancestral": 0.0, "Population_1": 0.72, "Population_2": -0.72}
+
+    def draw_tube(name, x_start, x_end, label, parameter_label):
+        center = centers[name]
+        half_height = half_heights[name]
+        ax.fill_between(
+            [x_start, x_end],
+            center - half_height,
+            center + half_height,
+            color=colors[name],
+            alpha=0.88,
+            linewidth=1.0,
+            edgecolor=colors[name],
+            zorder=2,
         )
-        ax.set_ylim(bottom=1, top=top_time)
-
-        # Give demesdraw's layout extra horizontal breathing room.
-        left, right = ax.get_xlim()
-        pad = 0.05 * (right - left)
-        ax.set_xlim(left - pad, right + pad)
-    else:
-        # Fallback for local environments without demesdraw. Snakemake's
-        # moments env includes demesdraw and will use the renderer above.
-        tube_width = 0.34
-        pop1_x, anc_x, pop2_x = 0.0, 1.0, 2.0
-
-        def draw_tube(x, y0, y1, color, label):
-            ax.fill_betweenx(
-                [y0, y1],
-                x - tube_width,
-                x + tube_width,
-                color=color,
-                alpha=0.88,
-                linewidth=0,
+        label_x = np.sqrt(max(x_start, 1) * max(x_end, 1))
+        label_box = VPacker(
+            children=[
+                TextArea(
+                    label,
+                    textprops=dict(fontsize=font_size, color="#202020"),
+                ),
+                TextArea(
+                    parameter_label,
+                    textprops=dict(fontsize=font_size - 1, color="#202020"),
+                ),
+            ],
+            align="center",
+            pad=0,
+            sep=0,
+        )
+        ax.add_artist(
+            AnnotationBbox(
+                label_box,
+                (label_x, center),
+                xycoords="data",
+                frameon=True,
+                box_alignment=(0.5, 0.5),
+                bboxprops=dict(
+                    facecolor="white",
+                    edgecolor="none",
+                    boxstyle="square,pad=0.12",
+                    alpha=0.78,
+                ),
+                zorder=3,
             )
-            y_label = 10 ** ((np.log10(max(y0, 1)) + np.log10(y1)) / 2)
-            ax.text(x, y_label, label, ha="center", va="center", fontsize=13)
-
-        draw_tube(anc_x, split_time, top_time, colors["ancestral"], "ancestral")
-        draw_tube(pop1_x, 1, split_time, colors["Population_1"], "intronerful")
-        draw_tube(pop2_x, 1, split_time, colors["Population_2"], "intronerless")
-        ax.plot(
-            [pop1_x, anc_x, pop2_x],
-            [split_time, split_time, split_time],
-            color="0.2",
-            linewidth=1.4,
         )
-        ax.annotate(
-            "",
-            xy=(pop2_x - tube_width, split_time / 30),
-            xytext=(pop1_x + tube_width, split_time / 30),
-            arrowprops=dict(arrowstyle="<->", color="0.25", lw=1.2),
+
+    ancestral_ne = graph.metadata["true_ancestral_ne"]
+    population_1_ne = deme_plot_size(graph, "Population_1")
+    population_2_ne = deme_plot_size(graph, "Population_2")
+    draw_tube(
+        "ancestral",
+        top_time,
+        split_time,
+        "Ancestral",
+        rf"($N_e={scientific_mathtext(ancestral_ne)}$)",
+    )
+    draw_tube(
+        "Population_1",
+        split_time,
+        1,
+        "Population 1",
+        rf"($N_e={scientific_mathtext(population_1_ne)}$)",
+    )
+    draw_tube(
+        "Population_2",
+        split_time,
+        1,
+        "Population 2",
+        rf"($N_e={scientific_mathtext(population_2_ne)}$)",
+    )
+
+    # Vertical arrows at the split show ancestry without adding diagonal arms
+    # or a full-height guide line.
+    ancestral_top = centers["ancestral"] + half_heights["ancestral"]
+    ancestral_bottom = centers["ancestral"] - half_heights["ancestral"]
+    for name in ("Population_1", "Population_2"):
+        if name == "Population_1":
+            start_y = ancestral_top
+            end_y = centers[name] - half_heights[name]
+        else:
+            start_y = ancestral_bottom
+            end_y = centers[name] + half_heights[name]
+        ax.add_patch(
+            FancyArrowPatch(
+                (split_time, start_y),
+                (split_time, end_y),
+                arrowstyle="-|>",
+                mutation_scale=9,
+                linewidth=1.2,
+                color=colors[name],
+                zorder=4,
+            )
         )
-        ax.set_xticks([])
-        ax.set_xlim(-0.7, 2.7)
-        ax.set_yscale("log")
-        ax.set_ylim(bottom=1, top=top_time)
 
-    ax.set_ylabel('Generations Ago', fontsize=16)
+    if params["M"] > 0:
+        add_migration_arrows(
+            ax,
+            split_time,
+            centers["Population_1"],
+            centers["Population_2"],
+            graph.migrations[0].rate,
+            colors,
+            font_size,
+        )
 
-    # Increase tick label sizes
-    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.set_xscale("log")
+    ax.set_xlim(top_time * 1.08, 1)
+    ax.set_ylim(-1.15, 1.15)
+    ax.set_xlabel("Generations ago", fontsize=font_size + 1)
+    ax.set_yticks([])
+    ax.tick_params(axis="x", which="major", labelsize=font_size - 1, length=3)
+    ax.tick_params(axis="x", which="minor", length=2)
+    for spine in ("left", "right", "top"):
+        ax.spines[spine].set_visible(False)
 
-    # Increase population label sizes (labels are now mid-positioned on tubes)
-    for text in ax.texts:
-        text.set_fontsize(14)
-
-    plt.tight_layout()
+    fig.tight_layout(pad=0.45)
 
     # Save the plot
-    plt.savefig(output_pdf, dpi=300, bbox_inches='tight')
-    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, dpi=300, bbox_inches="tight", pad_inches=0.03)
+    fig.savefig(output_png, dpi=300, bbox_inches="tight", pad_inches=0.03)
 
 
     return fig
@@ -293,7 +391,7 @@ def main():
     parser.add_argument(
         "--ancestral-time-factor",
         type=float,
-        default=10.0,
+        default=40.0,
         help=(
             "How far above the fitted split time to start the ancestral deme "
             "for plotting. Default: %(default)s"
@@ -310,14 +408,22 @@ def main():
         ),
     )
     parser.add_argument(
-        "--daughter-ancestor-gap-factor",
+        "--figure-width",
         type=float,
-        default=0.35,
-        help=(
-            "Edge-to-edge gap between each daughter tube and the ancestral tube, "
-            "as a fraction of the widest plotted tube. Lower values shorten "
-            "ancestry arms. Default: %(default)s"
-        ),
+        default=6.5,
+        help="Figure width in inches. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--figure-height",
+        type=float,
+        default=2.35,
+        help="Figure height in inches. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--font-size",
+        type=float,
+        default=10.0,
+        help="Base font size in points. Default: %(default)s",
     )
     target = parser.add_mutually_exclusive_group()
     target.add_argument(
@@ -360,7 +466,9 @@ def main():
         args.output_pdf,
         args.output_png,
         args.color_guide,
-        args.daughter_ancestor_gap_factor,
+        args.figure_width,
+        args.figure_height,
+        args.font_size,
     )
 
     print(f"\nVisualization saved: {args.output_png}")

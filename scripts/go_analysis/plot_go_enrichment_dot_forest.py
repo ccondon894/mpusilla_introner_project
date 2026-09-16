@@ -169,6 +169,20 @@ def parse_args():
         action="store_true",
         help="Include curated rows even if empirical_significant_global is false.",
     )
+    parser.add_argument("--fig-width", type=float, default=11.5)
+    parser.add_argument(
+        "--fig-height",
+        type=float,
+        default=None,
+        help="Optional fixed figure height in inches; otherwise based on term count.",
+    )
+    parser.add_argument("--term-font-size", type=float, default=11.5)
+    parser.add_argument("--tick-font-size", type=float, default=11.5)
+    parser.add_argument("--axis-font-size", type=float, default=13.0)
+    parser.add_argument("--title-font-size", type=float, default=15.0)
+    parser.add_argument("--legend-font-size", type=float, default=11.0)
+    parser.add_argument("--theme-font-size", type=float, default=11.3)
+    parser.add_argument("--dpi", type=int, default=300)
     return parser.parse_args()
 
 
@@ -282,6 +296,15 @@ def plot(
     title,
     show_legends=True,
     group_by_theme=True,
+    fig_width=11.5,
+    fig_height=None,
+    term_font_size=11.5,
+    tick_font_size=11.5,
+    axis_font_size=13.0,
+    title_font_size=15.0,
+    legend_font_size=11.0,
+    theme_font_size=11.3,
+    dpi=300,
 ):
     if df.empty:
         raise ValueError("No curated rows were available to plot after filtering.")
@@ -301,8 +324,9 @@ def plot(
     xlim = max(1.75, np.ceil((max_abs + 0.25) * 2) / 2)
     zero_x = -xlim + 0.12
     df["plot_log2_fold_enrichment"] = df["log2_fold_enrichment"].fillna(zero_x)
-    fig_height = max(5.4, 0.48 * len(y_labels) + 2.8)
-    fig, ax = plt.subplots(figsize=(11.5, fig_height))
+    if fig_height is None:
+        fig_height = max(5.4, 0.48 * len(y_labels) + 2.8)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
     ax.axvspan(-xlim, 0, color="#eef3f5", zorder=0)
     ax.axvspan(0, xlim, color="#fff4ec", zorder=0)
@@ -337,13 +361,30 @@ def plot(
 
     ax.set_xlim(-xlim, xlim)
     ax.set_yticks(list(y_labels))
-    ax.set_yticklabels([y_labels[y] for y in y_labels], fontsize=11.5)
+    ax.set_yticklabels([y_labels[y] for y in y_labels], fontsize=term_font_size)
     ax.invert_yaxis()
-    ax.set_xlabel("log2 fold enrichment vs GO-annotated background", fontsize=13)
+    ax.set_xlabel(
+        "log2 fold enrichment vs GO-annotated background",
+        fontsize=axis_font_size,
+    )
     ax.set_ylabel("")
     ax.grid(axis="x", color="#cccccc", linewidth=0.6, alpha=0.6)
-    ax.tick_params(axis="y", length=4, width=1.0, direction="out", color="#333333")
-    ax.tick_params(axis="x", length=4, width=1.0, direction="out", color="#333333")
+    ax.tick_params(
+        axis="y",
+        length=4,
+        width=1.0,
+        direction="out",
+        color="#333333",
+        labelsize=term_font_size,
+    )
+    ax.tick_params(
+        axis="x",
+        length=4,
+        width=1.0,
+        direction="out",
+        color="#333333",
+        labelsize=tick_font_size,
+    )
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color("#333333")
@@ -356,13 +397,13 @@ def plot(
             theme,
             ha="left",
             va="center",
-            fontsize=11.3,
+            fontsize=theme_font_size,
             fontweight="bold",
             color="#333333",
             bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82, "pad": 1.8},
         )
 
-    ax.set_title(title, fontsize=15, pad=18)
+    ax.set_title(title, fontsize=title_font_size, pad=12)
 
     if show_legends:
         group_handles = [
@@ -419,11 +460,12 @@ def plot(
             labelspacing=0.8,
             handletextpad=0.8,
             borderpad=0.6,
+            fontsize=legend_font_size,
         )
 
     fig.tight_layout()
     output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, dpi=300, bbox_inches="tight", pad_inches=0.25)
+    fig.savefig(output, dpi=dpi, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
 
 
@@ -474,6 +516,15 @@ def main():
         output,
         "Representative GO terms supported by CDS-length-weighted permutation tests",
         group_by_theme=False,
+        fig_width=args.fig_width,
+        fig_height=args.fig_height,
+        term_font_size=args.term_font_size,
+        tick_font_size=args.tick_font_size,
+        axis_font_size=args.axis_font_size,
+        title_font_size=args.title_font_size,
+        legend_font_size=args.legend_font_size,
+        theme_font_size=args.theme_font_size,
+        dpi=args.dpi,
     )
     write_plotted_data(df, plotted_data)
     print(f"Wrote {output}")
@@ -505,6 +556,15 @@ def main():
             family1_output,
             "Family 1 cell-division GO enrichments",
             show_legends=False,
+            fig_width=args.fig_width,
+            fig_height=args.fig_height,
+            term_font_size=args.term_font_size,
+            tick_font_size=args.tick_font_size,
+            axis_font_size=args.axis_font_size,
+            title_font_size=args.title_font_size,
+            legend_font_size=args.legend_font_size,
+            theme_font_size=args.theme_font_size,
+            dpi=args.dpi,
         )
         write_plotted_data(family1_df, family1_plotted_data)
         print(f"Wrote {family1_output}")

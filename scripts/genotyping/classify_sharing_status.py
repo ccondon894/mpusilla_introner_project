@@ -72,8 +72,9 @@ def get_locus_key(member):
 
     Returns a ('hybrid', aa_ctx_or_none, legacy_key_or_none) tuple containing
     both the amino acid flanking context AND the legacy codon/intron key.
-    Two hybrid keys match if EITHER the aa contexts match OR the legacy
-    keys are compatible.
+    Amino-acid context is authoritative for mixed CDS/intron comparisons when
+    both contexts are available. The legacy exon/intron-number fallback is
+    retained when either context is unavailable.
 
     Rationale: the aa context is the primary signal (annotation-invariant),
     but it breaks when miniprot produces inconsistent CDS lengths across
@@ -212,10 +213,10 @@ def keys_within_tolerance(k1, k2, codon_tolerance,
                             aa_mismatch_tolerance=AA_CONTEXT_MISMATCH_TOLERANCE):
     """Check whether two hybrid locus keys point to the same biological locus.
 
-    Each key is a ('hybrid', aa_ctx, legacy_key) tuple. Two keys match if
-    EITHER:
+    Each key is a ('hybrid', aa_ctx, legacy_key) tuple. Two keys match if:
       - Both have aa contexts and they match via sliding-window comparison, OR
-      - Both have legacy codon/intron keys and they're compatible
+      - Both have legacy codon/intron keys and they're compatible, provided a
+        mixed CDS/intron comparison does not have contradictory AA contexts.
 
     The hybrid logic makes the comparison robust to miniprot annotation
     inconsistencies: when CDS lengths differ between samples (causing
@@ -233,10 +234,16 @@ def keys_within_tolerance(k1, k2, codon_tolerance,
     _, aa1, legacy1 = k1
     _, aa2, legacy2 = k2
 
-    # Try aa context match first
+    # For mixed CDS/intron annotations, explicit AA disagreement is evidence
+    # against equivalence and may not be overridden by the permissive exon N
+    # <-> intron N/N-1 fallback. Preserve that fallback when AA evidence is
+    # genuinely unavailable.
     if aa1 and aa2:
         if aa_contexts_match(aa1, aa2, max_mismatches=aa_mismatch_tolerance):
             return True
+        if legacy1 is not None and legacy2 is not None:
+            if {legacy1[0], legacy2[0]} == {'cds', 'intron'}:
+                return False
 
     # Fall back to legacy key match
     return _legacy_keys_match(legacy1, legacy2, codon_tolerance)

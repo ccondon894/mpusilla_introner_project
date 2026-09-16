@@ -23,6 +23,7 @@ from pathlib import Path
 # Output directories
 EXPRESSION_DIR = RESULTS / "expression"
 ISOFORM_DIR = EXPRESSION_DIR / "isoform_analysis"
+ISOFORM_TURNOVER_DIR = ISOFORM_DIR / "turnover"
 DIVERSITY_DIR = ISOFORM_DIR / "diversity"
 NMD_DIR = ISOFORM_DIR / "nmd"
 COUNTS_DIR = EXPRESSION_DIR / "counts"
@@ -52,6 +53,7 @@ ISOFORM_TRACK_PNGS = expand(
 MT_SCAFFOLD = config["mating_type_region"]["scaffold"]
 MT_START = config["mating_type_region"]["start"]
 MT_END = config["mating_type_region"]["end"]
+TURNOVER_MT_CONTIG = config["mating_type_region"]["group1"]["contig"]
 
 
 # ============================================================
@@ -284,109 +286,55 @@ rule nmd_by_strain:
 
 
 # ============================================================
-# ISOFORM COUNT ANALYSIS
+# LOCUS-AWARE ISOFORM TURNOVER DATA
 # ============================================================
 
-rule count_isoforms_per_gene:
+rule prepare_isoform_turnover_data:
     """
-    Count number of isoforms per gene for each strain.
+    Prepare the common-gene, locus-wise table used by isoform turnover models.
+
+    SQANTI assignments are audited against sample-specific GTFs. Genotype loci
+    are mapped to gene spans in each sample, missing calls remain missing, and
+    callable CCMP1545-relative gains and losses are counted independently.
     """
     input:
-        sqanti_data = SQANTI_DIR / "parsed_sqanti3_data.tsv"
-    output:
-        counts = ISOFORM_DIR / "isoform_counts_per_gene.csv"
-    log:
-        EXPRESSION_LOG_DIR / "count_isoforms.log"
-    conda: "../envs/isoform_analysis.yaml"
-    shell:
-        """
-        mkdir -p {ISOFORM_DIR}
-
-        python {PROJECT_ROOT}/scripts/expression/isoform_analysis/isoform_abundance_analysis.py \
-            --sqanti {input.sqanti_data} \
-            --output {output.counts} \
-            --mode count \
-            2> {log} || \
-        python -c "
-import pandas as pd
-# Fallback: simple isoform counting
-df = pd.read_csv('{input.sqanti_data}', sep='\\t')
-counts = df.groupby(['gene_id', 'strain']).size().reset_index(name='n_isoforms')
-counts.to_csv('{output.counts}', index=False)
-"
-        """
-
-
-# ============================================================
-# DATA PREPARATION FOR GLM MODELING
-# ============================================================
-
-rule prepare_isoform_data:
-    """
-    Prepare comprehensive isoform data for GLM modeling.
-
-    Merges:
-    - Isoform counts per gene
-    - Introner gain/loss features (from genotype matrix)
-    - CDS lengths (from GTF)
-    - Mean expression (from featureCounts counts matrix)
-    """
-    input:
-        isoform_counts = ISOFORM_DIR / "isoform_counts_per_gene.csv",
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
-        gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
-        counts_matrix = COUNTS_DIR / "merged_counts_matrix.csv"
+        ccmp1545_gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
+        rcc1614_gtf = ANNOTATIONS_DIR / "RCC1614.gtf",
+        rcc1749_gtf = ANNOTATIONS_DIR / "RCC1749.gtf",
+        ccmp1545_sqanti = PROJECT_ROOT / "data" / "sqanti3_output_834" / "834_isoforms_classification.filtered.txt",
+        rcc1614_sqanti = PROJECT_ROOT / "data" / "sqanti3_output_1614" / "1614_isoforms_classification.filtered.txt",
+        rcc1749_sqanti = PROJECT_ROOT / "data" / "sqanti3_output_1749" / "1749_isoforms_classification.filtered.txt",
+        script = PROJECT_ROOT / "scripts" / "expression" / "isoform_analysis" / "prepare_isoform_turnover_data.py"
     output:
-        data = ISOFORM_DIR / "isoform_introner_data.csv",
-        filtered = ISOFORM_DIR / "isoform_introner_data_filtered.csv"
-    params:
-        mt_scaffold = MT_SCAFFOLD,
-        mt_start = MT_START,
-        mt_end = MT_END
+        audit = ISOFORM_TURNOVER_DIR / "sqanti_gtf_audit.tsv",
+        crosswalk = ISOFORM_TURNOVER_DIR / "sample_gene_crosswalk.tsv",
+        richness = ISOFORM_TURNOVER_DIR / "isoform_richness_by_gene_strain.tsv",
+        locus_map = ISOFORM_TURNOVER_DIR / "locus_gene_map.tsv",
+        locus_events = ISOFORM_TURNOVER_DIR / "locus_level_reference_comparisons.tsv",
+        introner_features = ISOFORM_TURNOVER_DIR / "introner_features_by_gene_strain.tsv",
+        model_data = ISOFORM_TURNOVER_DIR / "isoform_introner_model_data.tsv",
+        summary = ISOFORM_TURNOVER_DIR / "data_preparation_summary.txt"
     log:
-        EXPRESSION_LOG_DIR / "prepare_isoform_data.log"
+        EXPRESSION_LOG_DIR / "prepare_isoform_turnover_data.log"
     conda: "../envs/isoform_analysis.yaml"
     shell:
         """
-        python {PROJECT_ROOT}/scripts/expression/prepare_isoform_data.py \
-            --isoform_counts {input.isoform_counts} \
-            --genotype_matrix {input.genotype_matrix} \
-            --gtf {input.gtf} \
-            --output {output.data} \
-            --filtered {output.filtered} \
-            --counts_matrix {input.counts_matrix} \
-            --mt_scaffold {params.mt_scaffold} \
-            --mt_start {params.mt_start} \
-            --mt_end {params.mt_end} \
-            2> {log}
-        """
-
-
-rule plot_introner_isoform_raincloud:
-    """
-    Plot isoform count and expression distributions grouped by introner count.
-
-    Ports the older raincloud-style isoform/introner visualization into the
-    current workflow using the filtered isoform-introner data table.
-    """
-    input:
-        data = ISOFORM_DIR / "isoform_introner_data_filtered.csv",
-        script = PROJECT_ROOT / "scripts" / "expression" / "isoform_analysis" / "plot_introner_isoform_raincloud.py"
-    output:
-        pdf = FIGURES_DIR / "introner_isoform_expression_raincloud.pdf",
-        png = FIGURES_DIR / "introner_isoform_expression_raincloud.png",
-        report = ISOFORM_DIR / "introner_isoform_expression_raincloud_stats.txt"
-    log:
-        EXPRESSION_LOG_DIR / "introner_isoform_raincloud.log"
-    conda: "../envs/isoform_analysis.yaml"
-    shell:
-        """
+        mkdir -p {ISOFORM_TURNOVER_DIR}
         python {input.script} \
-            --input {input.data} \
-            --output-pdf {output.pdf} \
-            --output-png {output.png} \
-            --report {output.report} \
-            2> {log}
+            --project-root {PROJECT_ROOT} \
+            --genotype-matrix {input.genotype_matrix} \
+            --ccmp1545-gtf {input.ccmp1545_gtf} \
+            --rcc1614-gtf {input.rcc1614_gtf} \
+            --rcc1749-gtf {input.rcc1749_gtf} \
+            --ccmp1545-sqanti {input.ccmp1545_sqanti} \
+            --rcc1614-sqanti {input.rcc1614_sqanti} \
+            --rcc1749-sqanti {input.rcc1749_sqanti} \
+            --mt-scaffold {TURNOVER_MT_CONTIG} \
+            --mt-start {MT_START} \
+            --mt-end {MT_END} \
+            --output-dir {ISOFORM_TURNOVER_DIR} \
+            > {log} 2>&1
         """
 
 
@@ -396,7 +344,7 @@ rule plot_introner_isoform_tracks:
     """
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
-        introner_intron_table = PROJECT_ROOT / "analysis" / "ccmp1545_gtf_liftover_test" / "current_genotype_introner_vs_annotated_intron_size.tsv",
+        introner_intron_table = RESULTS / "expression" / "functional" / "isoform_candidates" / "current_genotype_introner_vs_annotated_intron_size.tsv",
         ccmp1545_gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
         rcc1614_gtf = ANNOTATIONS_DIR / "RCC1614.gtf",
         rcc1749_gtf = ANNOTATIONS_DIR / "RCC1749.gtf",
@@ -446,11 +394,10 @@ rule isoform_analysis_complete:
         DIVERSITY_DIR / "shannon_diversity_per_gene.csv",
         DIVERSITY_DIR / "diversity_by_introner_status.csv",
         NMD_DIR / "nmd_introner_analysis.txt",
-        ISOFORM_DIR / "isoform_introner_data_filtered.csv",
-        ISOFORM_DIR / "introner_isoform_expression_raincloud_stats.txt",
+        ISOFORM_TURNOVER_DIR / "isoform_introner_model_data.tsv",
+        ISOFORM_TURNOVER_DIR / "data_preparation_summary.txt",
         FIGURES_DIR / "shannon_diversity_distribution.pdf",
         FIGURES_DIR / "nmd_introner_association.pdf",
-        FIGURES_DIR / "introner_isoform_expression_raincloud.pdf",
         ISOFORM_TRACK_PDFS,
         ISOFORM_TRACK_PNGS
 

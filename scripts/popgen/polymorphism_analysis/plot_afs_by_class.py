@@ -52,6 +52,16 @@ def parse_args():
     p.add_argument("--output_pdf", required=True)
     p.add_argument("--output_png", required=True)
     p.add_argument("--color_guide", default=str(DEFAULT_GUIDE_PATH))
+    p.add_argument("--fig_width", type=float, default=10.0,
+                   help="Figure width in inches (default: 10).")
+    p.add_argument("--fig_height", type=float, default=5.0,
+                   help="Figure height in inches (default: 5).")
+    p.add_argument("--axis_fontsize", type=float, default=10.0,
+                   help="Axis-label font size in points (default: 10).")
+    p.add_argument("--tick_fontsize", type=float, default=10.0,
+                   help="Axis-tick font size in points (default: 10).")
+    p.add_argument("--legend_fontsize", type=float, default=10.0,
+                   help="Legend font size in points (default: 10).")
     p.add_argument(
         "--status_filter",
         default="consistent,singleton",
@@ -266,7 +276,7 @@ def main():
     pd.DataFrame(rows).to_csv(args.output_tsv, sep="\t", index=False)
 
     width = 0.20
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(args.fig_width, args.fig_height))
     ax.bar(bins - 1.5 * width, syn_d, width,
            label="Synonymous",
            color=class_colors["synonymous"], edgecolor="black")
@@ -280,9 +290,12 @@ def main():
            label="Introns",
            color=class_colors["non_introner_intron"], edgecolor="black")
     ax.set_xticks(bins)
-    ax.set_xlabel("Group 1 allele count (derived SNPs / present introns)")
-    ax.set_ylabel("Density")
-    ax.legend(loc="upper right", bbox_to_anchor=(0.985, 0.985), frameon=False)
+    ax.set_xlabel("Population 1 allele count (derived SNPs / present introns)",
+                  fontsize=args.axis_fontsize)
+    ax.set_ylabel("Density", fontsize=args.axis_fontsize)
+    ax.tick_params(labelsize=args.tick_fontsize)
+    ax.legend(loc="upper right", bbox_to_anchor=(0.985, 0.985), frameon=False,
+              fontsize=args.legend_fontsize)
     fig.tight_layout()
     fig.savefig(args.output_pdf, dpi=300, bbox_inches="tight", format="pdf")
     fig.savefig(args.output_png, dpi=300, bbox_inches="tight", format="png")
