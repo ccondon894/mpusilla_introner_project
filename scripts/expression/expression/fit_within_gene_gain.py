@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Fit the within-gene R2C2 gain effect with gene-clustered uncertainty."""
 from pathlib import Path
 import argparse
 import sys
 import numpy as np
 import pandas as pd
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parents[1]))
 from figure_color_guide import load_color_guide
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'negative_binomial_expression_pilot'))
-from fit_expression_pilot_models import TURNOVER_VARS, fit_gene_fe_ppml, coefficient_frame, support_row
+sys.path.insert(0, str(SCRIPT_DIR))
+from expression_model_helpers import TURNOVER_VARS, fit_gene_fe_ppml, coefficient_frame, support_row
 
 
 def main():

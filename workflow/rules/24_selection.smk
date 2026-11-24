@@ -1,29 +1,8 @@
-# ============================================================
 # 24_selection.smk - Selection & Population Structure Analysis
-# ============================================================
-#
-# Performs various population genetics analyses:
-# - Tajima's D (neutrality test)
-# - Site frequency spectra
-# - Principal component analysis (PCA)
-# - Linkage disequilibrium (LD)
-# - Recombination rate comparisons
-#
-# Adapted from:
-# - /scratch1/chris/introner_vis/basic_popgen/
-# - /scratch1/chris/introner_vis/pca/
-# - /scratch1/chris/introner_vis/ld/
-# - /scratch1/chris/introner_vis/polymorphism_analysis/
-# - /scratch1/chris/introner_vis/recombination_analysis/
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 SNP_DIR = RESULTS / "snp_popgen"
@@ -82,19 +61,10 @@ PYRHO_CCMP1545_FILES = sorted(Path(PYRHO_CCMP1545).glob("*.pyrho.out"))
 CCMP1545_GRAPH_FAI = PROJECT_ROOT / f"{config['paths']['references']['ccmp1545_graph']}.fai"
 
 
-# ============================================================
-# BASIC POPULATION GENETICS STATISTICS
-# ============================================================
+# Basic population genetics statistics
 
 rule calculate_tajimas_d:
-    """
-    Calculate Tajima's D statistic for neutrality testing.
-
-    Tajima's D compares two estimates of genetic diversity:
-    - Positive D: Balancing selection or population contraction
-    - Negative D: Purifying selection or population expansion
-    - D ~ 0: Neutral evolution
-    """
+    """Calculate Tajima's D statistic for neutrality testing."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.group1.vcf.gz"
     output:
@@ -117,9 +87,7 @@ rule calculate_tajimas_d:
 
 
 rule plot_sfs_by_class:
-    """
-    Plots the SFS frequencies for synonymous/nonsynonymous and introner allele frequencies
-    """
+    """Plots the SFS frequencies for synonymous/nonsynonymous and introner allele frequencies"""
     input:
         snpeff_vcf = SNPEFF_DIR / "mpusilla.snps.snpEff.no_MT.vcf",
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
@@ -152,18 +120,10 @@ rule plot_sfs_by_class:
         """
 
 
-# ============================================================
-# GROUP 1 POLYMORPHIC INTRONER SWEEP SCREEN
-# ============================================================
+# Group 1 polymorphic introner sweep screen
 
 rule build_group1_introner_sweep_targets:
-    """
-    Build CCMP1545-anchored Group 1-only polymorphic introner targets.
-
-    Retains complete Group 1 polymorphisms with accepted within-group orthology,
-    no Group 2 presence calls, and no overlap with the CCMP1545 mating-type
-    region.
-    """
+    """Build CCMP1545-anchored Group 1-only polymorphic introner targets."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
@@ -200,10 +160,7 @@ rule build_group1_introner_sweep_targets:
 
 
 rule calculate_group1_introner_sweep_windows:
-    """
-    Compare sweep statistics around Group 1 polymorphic introners to matched
-    non-focal background windows in the Group 1 4D all-sites VCF.
-    """
+    """Compare sweep statistics around Group 1 polymorphic introners to matched non-focal background windows in the Group 1 4D all-sites VCF."""
     input:
         vcf = config["paths"]["fourfold_vcf"],
         targets = SWEEP_DIR / "group1_polymorphic_introner_targets.tsv"
@@ -241,18 +198,10 @@ rule calculate_group1_introner_sweep_windows:
         """
 
 
-# ============================================================
-# FIXED SNP SWEEP CONTROL
-# ============================================================
+# Fixed snp sweep control
 
 rule build_fixed_snp_sweep_targets:
-    """
-    Build 4D SNP targets fixed between Group 1 and Group 2.
-
-    These provide a same-timescale control for fixed introner loci: each target
-    is a biallelic 4D SNP where all Group 1 samples carry one allele and all
-    Group 2 samples carry the other allele.
-    """
+    """Build 4D SNP targets fixed between Group 1 and Group 2."""
     input:
         vcf = config["paths"]["fourfold_all_samples_vcf"]
     output:
@@ -287,10 +236,7 @@ rule build_fixed_snp_sweep_targets:
 
 
 rule calculate_fixed_snp_sweep_windows:
-    """
-    Compare sweep statistics around fixed 4D SNPs to matched non-focal
-    background windows in the Group 1 4D all-sites VCF.
-    """
+    """Compare sweep statistics around fixed 4D SNPs to matched non-focal background windows in the Group 1 4D all-sites VCF."""
     input:
         vcf = config["paths"]["fourfold_vcf"],
         targets = FIXED_SNP_SWEEP_DIR / "fixed_snp_targets.tsv"
@@ -329,15 +275,10 @@ rule calculate_fixed_snp_sweep_windows:
         """
 
 
-# ============================================================
-# SWEEPFINDER2 GENOME-WIDE CLR SCAN
-# ============================================================
+# Sweepfinder2 genome-wide clr scan
 
 rule build_sweepfinder_input:
-    """
-    Build filtered frequency, uniform-grid, and pyrho recombination files for
-    either the Group 1 4D or all-SNP scan.
-    """
+    """Build filtered frequency, uniform-grid, and pyrho recombination files for either the Group 1 4D or all-SNP scan."""
     input:
         vcf = lambda wildcards: SF2_VCFS[wildcards.site_class],
         fai = CCMP1545_GRAPH_FAI,
@@ -393,9 +334,7 @@ rule build_sweepfinder_input:
 
 
 rule compute_sweepfinder_spectrum:
-    """
-    Compute the genome-wide empirical folded SFS for SweepFinder2 (-f).
-    """
+    """Compute the genome-wide empirical folded SFS for SweepFinder2 (-f)."""
     input:
         combined_freq = SF2_DIR / "{site_class}" / "combined.freq"
     output:
@@ -410,9 +349,7 @@ rule compute_sweepfinder_spectrum:
 
 
 rule run_sweepfinder_scan:
-    """
-    Run recombination-aware SweepFinder2 (-lru) using the pyrho map.
-    """
+    """Run recombination-aware SweepFinder2 (-lru) using the pyrho map."""
     input:
         contigs = SF2_DIR / "{site_class}" / "contigs.tsv",
         spectrum = SF2_DIR / "{site_class}" / "spectrum.out",
@@ -442,9 +379,7 @@ rule run_sweepfinder_scan:
 
 
 rule call_sweep_regions:
-    """
-    Merge per-contig CLR outputs, call sweep-like regions, and plot Manhattan.
-    """
+    """Merge per-contig CLR outputs, call sweep-like regions, and plot Manhattan."""
     input:
         contigs = SF2_DIR / "{site_class}" / "contigs.tsv",
         marker = SF2_DIR / "{site_class}" / "scan_complete.txt",
@@ -483,11 +418,7 @@ rule call_sweep_regions:
 
 
 rule test_introner_sweep_enrichment:
-    """
-    Test fixed vs polymorphic Group 1 introner enrichment/depletion in
-    each SweepFinder2 scan's sweep regions vs non-introner introns and a
-    permutation null.
-    """
+    """Test fixed vs polymorphic Group 1 introner enrichment/depletion in each SweepFinder2 scan's sweep regions vs non-introner introns and a permutation null."""
     input:
         clr_tsv = SF2_DIR / "{site_class}" / "sweepfinder_clr.tsv",
         regions_bed = SF2_DIR / "{site_class}" / "sweep_regions.bed",
@@ -547,14 +478,10 @@ rule test_introner_sweep_enrichment:
         """
 
 
-# ============================================================
-# PRINCIPAL COMPONENT ANALYSIS
-# ============================================================
+# Principal component analysis
 
 rule vcf_to_plink:
-    """
-    Convert VCF to PLINK format for PCA.
-    """
+    """Convert VCF to PLINK format for PCA."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"
     output:
@@ -580,14 +507,7 @@ rule vcf_to_plink:
 
 
 rule ld_pruning:
-    """
-    LD pruning for PCA to remove correlated SNPs.
-
-    Uses sliding window approach:
-    - Window size: 50 SNPs
-    - Step size: 5 SNPs
-    - r² threshold: 0.2
-    """
+    """LD pruning for PCA to remove correlated SNPs."""
     input:
         bed = PCA_DIR / "mpusilla.snps.bed",
         bim = PCA_DIR / "mpusilla.snps.bim",
@@ -614,9 +534,7 @@ rule ld_pruning:
 
 
 rule run_pca:
-    """
-    Run PCA on LD-pruned SNPs.
-    """
+    """Run PCA on LD-pruned SNPs."""
     input:
         bed = PCA_DIR / "mpusilla.snps.bed",
         prune_in = PCA_DIR / "mpusilla.snps.prune.in"
@@ -640,13 +558,7 @@ rule run_pca:
 
 
 rule plot_pca:
-    """
-    Generate PCA visualization plot.
-
-    Colors samples by group:
-    - Group1 (intronerful): Blue
-    - Group2 (intronerless): Red
-    """
+    """Generate PCA visualization plot."""
     input:
         eigenval = PCA_DIR / "mpusilla.snps.eigenval",
         eigenvec = PCA_DIR / "mpusilla.snps.eigenvec"
@@ -672,16 +584,10 @@ rule plot_pca:
         """
 
 
-# ============================================================
-# LINKAGE DISEQUILIBRIUM ANALYSIS
-# ============================================================
+# Linkage disequilibrium analysis
 
 rule compute_ld:
-    """
-    Compute pairwise linkage disequilibrium (r²) between SNPs.
-
-    Calculates LD within 100kb windows.
-    """
+    """Compute pairwise linkage disequilibrium (r²) between SNPs."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.group1.vcf.gz"
     output:
@@ -704,12 +610,7 @@ rule compute_ld:
 
 
 rule summarize_ld:
-    """
-    Summarize LD by distance bins.
-
-    Groups SNP pairs into distance bins and calculates
-    mean r² per bin for LD decay visualization.
-    """
+    """Summarize LD by distance bins."""
     input:
         ld = LD_DIR / "ld_pairwise.tsv.gz"
     output:
@@ -730,9 +631,7 @@ rule summarize_ld:
 
 
 rule plot_ld_decay:
-    """
-    Plot LD decay with genomic distance.
-    """
+    """Plot LD decay with genomic distance."""
     input:
         summary = LD_DIR / "ld_summary_by_distance.tsv"
     output:
@@ -755,15 +654,10 @@ rule plot_ld_decay:
         """
 
 
-# ============================================================
-# RECOMBINATION ANALYSIS
-# ============================================================
+# Recombination analysis
 
 rule compare_recombination_introners_all:
-    """
-    Gene-centric recombination comparison: all introners vs non-introner windows.
-    Produces gene_exonic_introners_all_5kb_updated_{summary,windows}.tsv + pdf.
-    """
+    """Gene-centric recombination comparison: all introners vs non-introner windows."""
     input:
         gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
         introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
@@ -800,10 +694,7 @@ rule compare_recombination_introners_all:
 
 
 rule compare_recombination_introners_polymorphic:
-    """
-    Gene-centric recombination comparison: polymorphic introners only.
-    Produces gene_exonic_polymorphic_introners_5kb_updated_{summary,windows}.tsv + pdf.
-    """
+    """Gene-centric recombination comparison: polymorphic introners only."""
     input:
         gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
         introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
@@ -840,10 +731,7 @@ rule compare_recombination_introners_polymorphic:
 
 
 rule compare_recombination_frequency_based:
-    """
-    Frequency-based recombination comparison: recent gain vs recent loss vs non-introner.
-    Produces gene_exonic_frequency_based_5kb_updated_{summary,windows}.tsv + pdf.
-    """
+    """Frequency-based recombination comparison: recent gain vs recent loss vs non-introner."""
     input:
         gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
         introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
@@ -878,14 +766,7 @@ rule compare_recombination_frequency_based:
 
 
 rule compare_recombination_group2:
-    """
-    Recombination at positions where Group 2 (RCC1749/RCC3052) has introners,
-    measured in RCC1749's recombination landscape.
-
-    Uses the RCC1749 GTF (contigs named RCC1749#0#intronerless_contig_X) and
-    RCC1749 pyrho map together — both are in RCC1749 frame and align with the
-    G2-sample contig names in the genotype matrix.
-    """
+    """Recombination at positions where Group 2 (RCC1749/RCC3052) has introners, measured in RCC1749's recombination landscape."""
     input:
         gtf = ANNOTATIONS_DIR / "RCC1749.gtf",
         introner_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
@@ -922,10 +803,7 @@ rule compare_recombination_group2:
 
 
 rule plot_recombination_boxplots:
-    """
-    Generate boxplots comparing recombination rates by introner category:
-    non-introner, all introners, polymorphic, recent gain, recent loss, plus Group 2.
-    """
+    """Generate boxplots comparing recombination rates by introner category: non-introner, all introners, polymorphic, recent gain, recent loss, plus Group 2."""
     input:
         all_windows = RECOMB_DIR / "gene_exonic_introners_all_5kb_updated_windows.tsv",
         poly_windows = RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated_windows.tsv",
@@ -952,11 +830,7 @@ rule plot_recombination_boxplots:
 
 
 rule plot_recombination_violin_categories:
-    """
-    Generate violin plots for selected pyrho recombination categories:
-    Population 1 exonic background, all introners, polymorphic introners,
-    Population 2 exonic background, and Population 2 all introners.
-    """
+    """Generate violin plots for selected pyrho recombination categories: Population 1 exonic background, all introners, polymorphic introners, Population 2 exonic background, and Population 2 all introners."""
     input:
         group1_all_windows = RECOMB_DIR / "common_background/group1.comparison_windows.tsv",
         group1_polymorphic_windows = RECOMB_DIR / "common_background/group1.comparison_windows.tsv",
@@ -986,14 +860,8 @@ rule plot_recombination_violin_categories:
         """
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule selection_complete:
-    """
-    Target: Complete selection and population structure analysis.
-    """
+    """Target: Complete selection and population structure analysis."""
     input:
         # Basic popgen
         SELECTION_DIR / "tajimas_d.tsv",
@@ -1037,9 +905,7 @@ rule selection_complete:
 
 
 rule basic_popgen_only:
-    """
-    Target: Basic population genetics statistics only.
-    """
+    """Target: Basic population genetics statistics only."""
     input:
         SELECTION_DIR / "tajimas_d.tsv",
         SFS_DIR / "afs_by_class.tsv",
@@ -1047,27 +913,21 @@ rule basic_popgen_only:
 
 
 rule pca_only:
-    """
-    Target: PCA analysis only.
-    """
+    """Target: PCA analysis only."""
     input:
         PCA_DIR / "mpusilla.snps.eigenvec",
         FIGURES_DIR / "snp_popgen" / "pca.pdf"
 
 
 rule ld_only:
-    """
-    Target: LD analysis only.
-    """
+    """Target: LD analysis only."""
     input:
         LD_DIR / "ld_summary_by_distance.tsv",
         FIGURES_DIR / "snp_popgen" / "ld_decay.pdf"
 
 
 rule recombination_only:
-    """
-    Target: Recombination analysis only.
-    """
+    """Target: Recombination analysis only."""
     input:
         RECOMB_DIR / "gene_exonic_introners_all_5kb_updated_summary.tsv",
         RECOMB_DIR / "gene_exonic_polymorphic_introners_5kb_updated_summary.tsv",
@@ -1078,9 +938,7 @@ rule recombination_only:
 
 
 rule group1_introner_sweeps:
-    """
-    Target: Group 1 polymorphic introner selective sweep screen only.
-    """
+    """Target: Group 1 polymorphic introner selective sweep screen only."""
     input:
         SWEEP_DIR / "group1_polymorphic_introner_targets.tsv",
         SWEEP_DIR / "group1_polymorphic_introner_targets.bed",
@@ -1092,9 +950,7 @@ rule group1_introner_sweeps:
 
 
 rule fixed_snp_sweep_control:
-    """
-    Target: Fixed 4D SNP sweep-control screen only.
-    """
+    """Target: Fixed 4D SNP sweep-control screen only."""
     input:
         FIXED_SNP_SWEEP_DIR / "fixed_snp_targets.tsv",
         FIXED_SNP_SWEEP_DIR / "fixed_snp_targets.bed",
@@ -1106,10 +962,7 @@ rule fixed_snp_sweep_control:
 
 
 rule sweepfinder_sweeps:
-    """
-    Target: recombination-aware 4D and all-SNP SweepFinder2 scans plus
-    introner enrichment tests.
-    """
+    """Target: recombination-aware 4D and all-SNP SweepFinder2 scans plus introner enrichment tests."""
     input:
         expand(
             str(SF2_DIR / "{site_class}" / "combined.freq"),
@@ -1178,10 +1031,7 @@ rule sweepfinder_sweeps:
 
 
 rule sweepfinder_scans:
-    """
-    Target: filtered, pyrho-aware SweepFinder2 scans for 4D and all SNPs,
-    without downstream introner enrichment tests.
-    """
+    """Target: filtered, pyrho-aware SweepFinder2 scans for 4D and all SNPs, without downstream introner enrichment tests."""
     input:
         expand(
             str(SF2_DIR / "{site_class}" / "sweepfinder_clr.tsv"),

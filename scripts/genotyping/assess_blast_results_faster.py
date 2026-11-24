@@ -14,7 +14,6 @@ columns = [
 # Read the input file
 df = pd.read_csv(bed_file, sep='\t', names=columns)
 
-# -------------------------------------------------------------------------
 # 1) Vectorized filtering to handle the "pident >= 90" logic
 
 # Calculate the max pident for each (sseqid, start, end)
@@ -32,7 +31,6 @@ filtered_df = df[mask].copy()
 # We no longer need the helper column
 filtered_df.drop(columns='pident_max', inplace=True)
 
-# -------------------------------------------------------------------------
 # 2) Single-pass overlap filter
 
 # First, sort by sseqid, start, end

@@ -100,7 +100,7 @@ def main():
     print(f"Genotype matrix: {G.shape}  stats={stats}", file=sys.stderr)
     n_sites = G.shape[0]
 
-    # ---- Pairwise IBS ----------------------------------------------------
+    # Pairwise IBS
     ibs = np.eye(n)
     for i, j in combinations(range(n), 2):
         ibs[i, j] = ibs[j, i] = float(np.mean(G[:, i] == G[:, j]))
@@ -130,7 +130,7 @@ def main():
     print(f"Top pair: {top_pair['sample_A']} / {top_pair['sample_B']}  "
           f"IBS={top_pair['IBS']:.4f}  z={z_top:.2f}", file=sys.stderr)
 
-    # ---- bin-2 decomposition ---------------------------------------------
+    # bin-2 decomposition
     # Folded bin 2 (n=6): allele count == 2 OR allele count == 4. For each
     # such site, count which sample-pair carries the minor allele (AC=2 case)
     # or which pair is REF (AC=4 case, pair is the absent allele = minor).
@@ -172,7 +172,6 @@ def main():
           f"~{top_pair_count / expected_uniform:.2f}x uniform",
           file=sys.stderr)
 
-    # ---- Plot ------------------------------------------------------------
     fig, (ax_h, ax_b) = plt.subplots(1, 2, figsize=(14, 5),
                                       gridspec_kw={"width_ratios": [1, 1.2]})
 

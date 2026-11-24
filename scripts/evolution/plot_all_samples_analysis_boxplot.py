@@ -357,7 +357,6 @@ def main():
     for key, vals in pi_data.items():
         print_group_summary(key, vals)
 
-    # ---- Create figure ----
     fig, (ax1, ax2) = plt.subplots(
         1, 2, figsize=(args.fig_width, args.fig_height)
     )

@@ -24,7 +24,9 @@ def load_fasta_sequences(fasta_dir, flank_length):
     for file in glob.glob(pattern):
         with open(file) as handle:
             for record in SeqIO.parse(handle, "fasta"):
-                fasta_dict[record.id] = str(record.seq)
+                # bedtools -name may retain a split-locus prefix before the coordinates.
+                flank_id = record.id.rsplit("::", 1)[-1]
+                fasta_dict[flank_id] = str(record.seq)
     return fasta_dict
 
 ACCEPTED_WITHIN_STATUS = {'consistent', 'singleton'}

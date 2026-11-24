@@ -1,9 +1,4 @@
-# ============================================================================
 # 15_shared_introner_divergence.smk
-# Test whether shared introners (present in both Group 1 and Group 2) are
-# ancestral or convergent insertions by comparing introner body Dxy to
-# flanking region Dxy.
-# ============================================================================
 
 import os
 from pathlib import Path
@@ -28,15 +23,10 @@ NON_REF_SAMPLES = [s for s in ALL_SAMPLES if s != REFERENCE]
 SHARED_REGIONS = ["introner_body", "left_flank", "right_flank"]
 
 
-# ============================================================================
-# TARGET RULE
-# ============================================================================
+# Target rule
 
 rule shared_introner_divergence_all:
-    """
-    Target: Compare introner body divergence to flanking divergence
-    for shared loci to distinguish ancestral from convergent insertions.
-    """
+    """Target: Compare introner body divergence to flanking divergence for shared loci to distinguish ancestral from convergent insertions."""
     input:
         SHARED_DIV_METRICS / "introner_vs_flank_dxy_all_shared.tsv",
         SHARED_DIV_METRICS / "introner_vs_flank_dxy_fixed_shared.tsv",
@@ -44,9 +34,7 @@ rule shared_introner_divergence_all:
         SHARED_DIV_FIGURES / "dxy_scatter_all_shared.png"
 
 
-# ============================================================================
-# STEP 1: IDENTIFY SHARED LOCI AND GENERATE BED FILES
-# ============================================================================
+# Step 1: identify shared loci and generate bed files
 
 rule identify_shared_loci:
     """Identify shared introner loci and generate BED files for body + flanks."""
@@ -79,9 +67,7 @@ rule identify_shared_loci:
         """
 
 
-# ============================================================================
 # STEP 2: BUILD CONSENSUS SEQUENCES (mpileup pipeline)
-# ============================================================================
 
 rule shared_introner_mpileup:
     """Generate mpileup for shared introner regions (non-reference samples)."""
@@ -168,9 +154,7 @@ rule shared_introner_ref_consensus:
         """
 
 
-# ============================================================================
-# STEP 3: BUILD MAFFT ALIGNMENTS
-# ============================================================================
+# Step 3: build mafft alignments
 
 rule align_shared_introners:
     """Build MAFFT alignments for all shared introner loci."""
@@ -204,9 +188,7 @@ rule align_shared_introners:
         """
 
 
-# ============================================================================
-# STEP 4: CALCULATE DXY AND COMPARE
-# ============================================================================
+# Step 4: calculate dxy and compare
 
 rule calculate_introner_flank_dxy:
     """Calculate and compare introner body Dxy vs flanking Dxy."""

@@ -1,26 +1,7 @@
-# ============================================================
 # 40_go_enrichment.smk - GO Term Enrichment Analysis
-# ============================================================
-#
-# Performs Gene Ontology enrichment analysis for biologically defined
-# introner groups in genotype_matrix.final.tsv:
-# 1. Generate GO mappings from multiple databases (Pfam, KO, TAIR, PANTHER)
-# 2. Enhance GO coverage by merging all sources
-# 3. Classify final-matrix introner loci as all introners, ancestral,
-#    independent insertion, polymorphic within Group 1, consistently
-#    present within Group 1/2, or present introners from each sequence family
-# 4. Run full-GO and GO Slim enrichment and generate final figures
-#
-# Adapted from:
-# - /scratch1/chris/mpusilla_go_analysis/scripts/
-#
-# ============================================================
 
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 GO_DIR = RESULTS / "go_enrichment"
@@ -51,17 +32,10 @@ EGGNOG_TAX_SCOPE = config["params"]["go"].get("eggnog_tax_scope", "auto")
 EGGNOG_ENV = "../envs/eggnog_mapper.yaml"
 
 
-# ============================================================
-# GO TERM MAPPING FROM MULTIPLE DATABASES
-# ============================================================
+# Go term mapping from multiple databases
 
 rule run_eggnog_mapper:
-    """
-    Run eggNOG-mapper on the reference protein FASTA.
-
-    The expensive emapper step is skipped if the annotations output already
-    exists, while the database download remains independently idempotent.
-    """
+    """Run eggNOG-mapper on the reference protein FASTA."""
     input:
         proteins = REFERENCE_PROTEINS
     output:
@@ -119,10 +93,7 @@ rule run_eggnog_mapper:
 
 
 rule parse_eggnog_to_gene2go:
-    """
-    Convert eggNOG-mapper annotations into a gene2go JSON compatible with the
-    downstream GO enrichment workflow.
-    """
+    """Convert eggNOG-mapper annotations into a gene2go JSON compatible with the downstream GO enrichment workflow."""
     input:
         emapper = GO_EGGNOG_DIR / f"{EGGNOG_PREFIX}.emapper.annotations",
         fasta = REFERENCE_PROTEINS,
@@ -151,12 +122,7 @@ rule parse_eggnog_to_gene2go:
 
 
 rule pfam_to_go:
-    """
-    Map Pfam domain IDs to GO terms via InterPro.
-
-    Uses InterPro2GO mapping file and queries InterPro API
-    to link Pfam domains to GO terms.
-    """
+    """Map Pfam domain IDs to GO terms via InterPro."""
     input:
         interpro2go = INTERPRO2GO,
         interpro_to_pfam = INTERPRO_TO_PFAM,
@@ -187,11 +153,7 @@ rule pfam_to_go:
 
 
 rule ko_to_go:
-    """
-    Map KEGG Orthology (KO) IDs to GO terms via KEGG REST API.
-
-    NOTE: Requires internet connection.
-    """
+    """Map KEGG Orthology (KO) IDs to GO terms via KEGG REST API."""
     input:
         annotation = ANNOTATION_INFO
     output:
@@ -220,11 +182,7 @@ rule ko_to_go:
 
 
 rule tair_to_go:
-    """
-    Map TAIR Arabidopsis gene IDs to GO terms.
-
-    Uses TAIR gene association file (GAF format).
-    """
+    """Map TAIR Arabidopsis gene IDs to GO terms."""
     input:
         annotation = ANNOTATION_INFO,
         tair_assoc = TAIR_ASSOC
@@ -248,9 +206,7 @@ rule tair_to_go:
 
 
 rule panther_to_go:
-    """
-    Parse PANTHER database for GO term mappings.
-    """
+    """Parse PANTHER database for GO term mappings."""
     input:
         panther_db = PANTHER_HMM
     output:
@@ -272,16 +228,7 @@ rule panther_to_go:
 
 
 rule enhance_go_coverage:
-    """
-    Merge all GO mappings into comprehensive gene-to-GO dictionary.
-
-    Combines:
-    - Direct GO annotations from annotation file
-    - Pfam-derived GO terms
-    - KO-derived GO terms
-    - TAIR-derived GO terms
-    - PANTHER-derived GO terms
-    """
+    """Merge all GO mappings into comprehensive gene-to-GO dictionary."""
     input:
         annotation = ANNOTATION_INFO,
         pfam_json = GO_MAPPING_DIR / "pfam_to_go.json",
@@ -332,28 +279,10 @@ with open('{output.stats}', 'w') as f:
         """
 
 
-# ============================================================
-# FINAL-MATRIX INTRONER GROUP GO ENRICHMENT
-# ============================================================
+# Final-matrix introner group go enrichment
 
 rule introner_group_go_enrichment:
-    """
-    GO enrichment for biologically defined introner groups in genotype_matrix.final.tsv.
-
-    Groups:
-    - ancestral: cross_group_status in ancestral/likely_ancestral/ancestral_low_identity
-    - independent_insertion: cross_group_status in independent/likely_independent
-    - polymorphic_within_group1: presence=1 and presence=2 both observed within Group 1
-    - consistent_group1: presence=1 for every Group 1 sample
-    - consistent_group2: presence=1 for every Group 2 sample
-    - all_introners: presence=1 in at least one Group 1 or Group 2 sample
-    - family_N: genes containing at least one present introner from family N
-
-    Missing calls (presence=3) are ignored for polymorphic and cross-group present
-    evidence. Consistent groups require every configured sample in that group to
-    be present. Background is all GO-annotated reference genes by default,
-    which supports the all_introners contrast against genes without introners.
-    """
+    """GO enrichment for biologically defined introner groups in genotype_matrix.final.tsv."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         go_json = GO_MAPPING_DIR / "gene2go.json",
@@ -398,12 +327,7 @@ rule introner_group_go_enrichment:
 
 
 rule introner_group_go_slim_enrichment:
-    """
-    GO Slim enrichment for the same final-matrix introner groups.
-
-    Uses broad propagated GO ancestor categories to reduce the multiple-testing
-    burden and test general enrichment/depletion patterns.
-    """
+    """GO Slim enrichment for the same final-matrix introner groups."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         go_json = GO_MAPPING_DIR / "gene2go.json",
@@ -445,9 +369,7 @@ rule introner_group_go_slim_enrichment:
 
 
 rule plot_introner_group_go_enrichment:
-    """
-    Plot GO enrichment results generated from genotype_matrix.final.tsv.
-    """
+    """Plot GO enrichment results generated from genotype_matrix.final.tsv."""
     input:
         enrichment = GO_RESULTS_DIR / "introner_group_go_enrichment.tsv",
         script = PROJECT_ROOT / "scripts" / "go_analysis" / "plot_introner_group_go_enrichment.py"
@@ -475,14 +397,10 @@ rule plot_introner_group_go_enrichment:
         """
 
 
-# ============================================================
-# CDS-LENGTH-WEIGHTED PERMUTATION TEST
-# ============================================================
+# Cds-length-weighted permutation test
 
 rule all_introner_go_cds_length_permutation:
-    """
-    Empirical GO enrichment test for all introner-bearing genes.
-    """
+    """Empirical GO enrichment test for all introner-bearing genes."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
@@ -536,13 +454,7 @@ rule all_introner_go_cds_length_permutation:
 
 
 rule introner_group_significant_go_cds_length_permutation:
-    """
-    Empirical GO test for all initially significant introner-group GO patterns.
-
-    For each row in introner_group_go_enrichment.significant.tsv, sample a
-    random gene set matching that introner group's GO/CDS-eligible study size,
-    with recipient-gene probability proportional to CDS length.
-    """
+    """Empirical GO test for all initially significant introner-group GO patterns."""
     input:
         observed = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.tsv",
         gene_sets = GO_RESULTS_DIR / "introner_group_gene_sets.tsv",
@@ -590,9 +502,7 @@ rule introner_group_significant_go_cds_length_permutation:
 
 
 rule plot_go_enrichment_dot_forest:
-    """
-    Plot a curated dot/forest panel of CDS-length-permutation-supported GO terms.
-    """
+    """Plot a curated dot/forest panel of CDS-length-permutation-supported GO terms."""
     input:
         empirical = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.tsv",
         script = PROJECT_ROOT / "scripts" / "go_analysis" / "plot_go_enrichment_dot_forest.py"
@@ -624,13 +534,7 @@ rule plot_go_enrichment_dot_forest:
 
 
 rule summarize_introner_group_unique_go_terms:
-    """
-    Identify empirically supported subgroup GO terms not captured by all_introners.
-
-    Exact-unique terms are absent from the all_introners significant set.
-    Ontology-unique terms are also not descendants of any all_introners
-    significant GO term.
-    """
+    """Identify empirically supported subgroup GO terms not captured by all_introners."""
     input:
         empirical = GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.tsv",
         go_obo = PROJECT_ROOT / "resources" / "go.obo",
@@ -662,19 +566,8 @@ rule summarize_introner_group_unique_go_terms:
         """
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule go_enrichment_complete:
-    """
-    Target: Complete current GO enrichment analysis pipeline, including
-    CDS-length-weighted permutation tests.
-
-    Uses the final genotype matrix and the biologically defined introner groups:
-    all_introners, ancestral, independent_insertion, polymorphic_within_group1,
-    consistent_group1, and consistent_group2.
-    """
+    """Target: Complete current GO enrichment analysis pipeline, including CDS-length-weighted permutation tests."""
     input:
         # GO mappings
         GO_MAPPING_DIR / "gene2go.json",
@@ -706,9 +599,7 @@ rule go_enrichment_complete:
 
 
 rule go_mapping_only:
-    """
-    Target: Generate GO mappings only.
-    """
+    """Target: Generate GO mappings only."""
     input:
         GO_MAPPING_DIR / "gene2go.json",
         GO_MAPPING_DIR / "gene2go.eggnog.json",
@@ -717,11 +608,7 @@ rule go_mapping_only:
 
 
 rule introner_group_go_enrichment_complete:
-    """
-    Target: Final-matrix GO enrichment for all introners, ancestral,
-    independent insertion, Group 1 polymorphic, and consistently present
-    introner groups.
-    """
+    """Target: Final-matrix GO enrichment for all introners, ancestral, independent insertion, Group 1 polymorphic, and consistently present introner groups."""
     input:
         GO_RESULTS_DIR / "introner_group_locus_classification.tsv",
         GO_RESULTS_DIR / "introner_group_gene_sets.tsv",
@@ -736,9 +623,7 @@ rule introner_group_go_enrichment_complete:
 
 
 rule all_introner_go_permutation_complete:
-    """
-    Target: CDS-length-weighted permutation GO test for all introner genes.
-    """
+    """Target: CDS-length-weighted permutation GO test for all introner genes."""
     input:
         GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.tsv",
         GO_RESULTS_DIR / "all_introner_go_cds_length_permutation.significant.tsv",
@@ -747,10 +632,7 @@ rule all_introner_go_permutation_complete:
 
 
 rule introner_group_significant_go_permutation_complete:
-    """
-    Target: CDS-length-weighted permutation test for all initially significant
-    introner-group GO enrichment/depletion rows.
-    """
+    """Target: CDS-length-weighted permutation test for all initially significant introner-group GO enrichment/depletion rows."""
     input:
         GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.tsv",
         GO_RESULTS_DIR / "introner_group_go_enrichment.significant.cds_length_permutation.empirical_significant.tsv",
@@ -758,9 +640,7 @@ rule introner_group_significant_go_permutation_complete:
 
 
 rule introner_group_unique_go_terms_complete:
-    """
-    Target: Summarize subgroup-specific GO terms relative to all_introners.
-    """
+    """Target: Summarize subgroup-specific GO terms relative to all_introners."""
     input:
         GO_RESULTS_DIR / "introner_group_go_enrichment.significant.unique_vs_all_introners.tsv",
         GO_RESULTS_DIR / "introner_group_go_enrichment.significant.ontology_unique_vs_all_introners.tsv",

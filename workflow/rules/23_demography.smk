@@ -1,26 +1,8 @@
-# ============================================================
 # 23_demography.smk - Demographic Modeling with moments
-# ============================================================
-#
-# Performs demographic inference using moments to estimate:
-# - Population sizes
-# - Split times
-# - Migration rates
-#
-# Pipeline:
-# 1. Write sample-to-population metadata
-# 2. Build folded 2D SFS from the haploid-coded 4D SNP VCF
-# 3. Fit split-migration model on observed and bootstrap SFSs
-# 4. Visualize demographic history
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 SNP_DIR = RESULTS / "snp_popgen"
@@ -34,20 +16,10 @@ POP1_NAME = "intronerful"
 POP2_NAME = "intronerless"
 
 
-# ============================================================
-# DEMOGRAPHIC MODEL FITTING
-# ============================================================
+# Demographic model fitting
 
 rule fit_demographic_model:
-    """
-    Fit split-migration demographic model using moments.
-
-    Estimates:
-    - N1: Effective population size of Group1
-    - N2: Effective population size of Group2
-    - T: Time since population split
-    - M: Symmetric migration between populations
-    """
+    """Fit split-migration demographic model using moments."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"
     output:
@@ -101,20 +73,10 @@ rule fit_demographic_model:
         """
 
 
-# ============================================================
-# VISUALIZATION
-# ============================================================
+# Visualization
 
 rule visualize_demography:
-    """
-    Create demographic model visualization.
-
-    Generates schematic of population history showing:
-    - Ancestral population
-    - Population split
-    - Current population sizes
-    - Migration arrows
-    """
+    """Create demographic model visualization."""
     input:
         params = DEMOGRAPHY_DIR / "model_fits.4d.txt",
         target_bed = SNP_DIR / "degenotate" / "degeneracy-all-sites.4d.bed.gz"
@@ -144,13 +106,7 @@ rule visualize_demography:
 
 
 rule plot_moments_fit:
-    """
-    Plot scatter matrix of moments bootstrap parameter estimates with 95% CIs.
-
-    Visualizes the joint distribution of (N1, N2, T, M, Theta) across
-    bootstrap iterations from the moments demographic fit, with confidence
-    intervals annotated.
-    """
+    """Plot scatter matrix of moments bootstrap parameter estimates with 95% CIs."""
     input:
         bootstrap = DEMOGRAPHY_DIR / "model_fits.4d.bootstrap.txt"
     output:
@@ -171,11 +127,7 @@ rule plot_moments_fit:
 
 
 rule plot_2d_afs:
-    """
-    Plot 2D allele frequency spectrum.
-
-    Creates heatmap visualization of joint SFS between Group1 and Group2.
-    """
+    """Plot 2D allele frequency spectrum."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"
     output:
@@ -204,14 +156,8 @@ rule plot_2d_afs:
         """
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule demography_complete:
-    """
-    Target: Complete demographic analysis.
-    """
+    """Target: Complete demographic analysis."""
     input:
         DEMOGRAPHY_DIR / "observed.2d.fs",
         DEMOGRAPHY_DIR / "model_fits.4d.txt",
@@ -221,17 +167,13 @@ rule demography_complete:
 
 
 rule moments_fitting_only:
-    """
-    Target: Run moments model fitting only.
-    """
+    """Target: Run moments model fitting only."""
     input:
         DEMOGRAPHY_DIR / "model_fits.4d.txt"
 
 
 rule demography_plots_only:
-    """
-    Target: Generate demographic plots only.
-    """
+    """Target: Generate demographic plots only."""
     input:
         FIGURES_DIR / "snp_popgen" / "demographic_model.pdf",
         FIGURES_DIR / "snp_popgen" / "2D_afs.pdf"

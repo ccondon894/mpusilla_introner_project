@@ -1,14 +1,4 @@
-# ============================================================================
 # 13_non_introner_introns.smk
-# Non-introner intron presence/absence polymorphism and allele frequency spectrum
-#
-# Tests whether non-introner introns show presence/absence polymorphism,
-# and computes folded + unfolded AFS for comparison with introner dynamics.
-# Uses minimap2 alignment for orthologous intron matching across assemblies,
-# with coverage validation to eliminate assembly-derived artifacts.
-#
-# v3: Adds short-read coverage validation via introner-caller --format simple
-# ============================================================================
 
 NON_INTRONER_DIR = EVOLUTION_DIR / "non_introner_introns"
 NON_INTRONER_COV_DIR = NON_INTRONER_DIR / "coverage"
@@ -25,10 +15,7 @@ NON_REF_SAMPLES = [s for s in GROUP1_SAMPLES + GROUP2_SAMPLES if s != REFERENCE]
 
 
 rule build_reference_intron_catalog:
-    """
-    Build catalog of reference non-introner introns.
-    Extracts introns from reference GTF, removes introner-overlapping ones.
-    """
+    """Build catalog of reference non-introner introns."""
     input:
         reference_gtf = ANNOTATIONS_DIR / f"{REFERENCE}.gtf",
         introner_loci = GENOTYPING_DIR / "introner_loci.bed",
@@ -46,11 +33,7 @@ rule build_reference_intron_catalog:
 
 
 rule build_reference_intron_catalog_with_mating:
-    """
-    Build a Circos-only catalog of reference non-introner introns.
-    This keeps the scaffold 2 mating-type region so chromosome density tracks
-    show the full intron landscape.
-    """
+    """Build a Circos-only catalog of reference non-introner introns."""
     input:
         reference_gtf = ANNOTATIONS_DIR / f"{REFERENCE}.gtf",
         introner_loci = GENOTYPING_DIR / "introner_loci.bed",
@@ -69,9 +52,7 @@ rule build_reference_intron_catalog_with_mating:
 
 
 rule make_intron_coverage_beds_with_mating:
-    """
-    Create Circos-only per-sample BED files from the with-mating intron catalog.
-    """
+    """Create Circos-only per-sample BED files from the with-mating intron catalog."""
     input:
         gtf = lambda wildcards: get_gtf(wildcards.sample),
         catalog = NON_INTRONER_CIRCOS_DIR / "reference_intron_catalog.with_mating.tsv",
@@ -94,9 +75,7 @@ rule make_intron_coverage_beds_with_mating:
 
 
 rule calculate_intron_locus_depth_with_mating:
-    """
-    Calculate read depth at Circos-only with-mating intron loci.
-    """
+    """Calculate read depth at Circos-only with-mating intron loci."""
     input:
         bed = NON_INTRONER_CIRCOS_COV_DIR / "{sample}.intron_loci.bed",
         bam = BAM_DIR / "{sample}.sorted.bam",
@@ -113,9 +92,7 @@ rule calculate_intron_locus_depth_with_mating:
 
 
 rule call_intron_presence_with_mating:
-    """
-    Call intron presence/absence for Circos-only with-mating intron loci.
-    """
+    """Call intron presence/absence for Circos-only with-mating intron loci."""
     input:
         bed = NON_INTRONER_CIRCOS_COV_DIR / "{sample}.intron_loci.bed",
         depth = NON_INTRONER_CIRCOS_COV_DIR / "{sample}.intron_depth.tsv",
@@ -129,10 +106,7 @@ rule call_intron_presence_with_mating:
 
 
 rule make_intron_coverage_beds:
-    """
-    Create per-sample BED files of intron loci with 100bp flanking
-    for the coverage caller. Only includes genes from reference catalog.
-    """
+    """Create per-sample BED files of intron loci with 100bp flanking for the coverage caller."""
     input:
         gtf = lambda wildcards: get_gtf(wildcards.sample),
         catalog = NON_INTRONER_DIR / "reference_intron_catalog.tsv",
@@ -155,10 +129,7 @@ rule make_intron_coverage_beds:
 
 
 rule calculate_intron_locus_depth:
-    """
-    Calculate read depth at each intron locus using samtools depth.
-    Reuses existing BAMs from the introner coverage calling pipeline.
-    """
+    """Calculate read depth at each intron locus using samtools depth."""
     input:
         bed = NON_INTRONER_COV_DIR / "{sample}.intron_loci.bed",
         bam = BAM_DIR / "{sample}.sorted.bam",
@@ -175,10 +146,7 @@ rule calculate_intron_locus_depth:
 
 
 rule call_intron_presence:
-    """
-    Call intron presence/absence based on coverage patterns using
-    introner-caller with --format simple (6-column BED input).
-    """
+    """Call intron presence/absence based on coverage patterns using introner-caller with --format simple (6-column BED input)."""
     input:
         bed = NON_INTRONER_COV_DIR / "{sample}.intron_loci.bed",
         depth = NON_INTRONER_COV_DIR / "{sample}.intron_depth.tsv",
@@ -192,14 +160,7 @@ rule call_intron_presence:
 
 
 rule non_introner_intron_afs_with_mating_for_circos:
-    """
-    Build a Circos-only non-introner intron genotype matrix that retains
-    CCMP1545 scaffold 2 mating-type region introns.
-
-    The standard non_introner_intron_afs rule remains filtered for evolutionary
-    analyses. This alternate matrix is only for complete chromosome density
-    tracks in the Circos plot.
-    """
+    """Build a Circos-only non-introner intron genotype matrix that retains CCMP1545 scaffold 2 mating-type region introns."""
     input:
         catalog = NON_INTRONER_CIRCOS_DIR / "reference_intron_catalog.with_mating.tsv",
         gtfs = [str(get_gtf(s)) for s in GROUP1_SAMPLES + GROUP2_SAMPLES],
@@ -250,11 +211,7 @@ rule non_introner_intron_afs_with_mating_for_circos:
 
 
 rule non_introner_intron_afs:
-    """
-    Build non-introner intron genotype matrix and allele frequency spectra.
-    Uses minimap2 alignment for orthologous intron matching, validated by
-    short-read coverage to eliminate assembly-derived artifacts.
-    """
+    """Build non-introner intron genotype matrix and allele frequency spectra."""
     input:
         gtfs = [str(get_gtf(s)) for s in GROUP1_SAMPLES + GROUP2_SAMPLES],
         assemblies = expand(

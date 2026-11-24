@@ -120,7 +120,7 @@ def main():
     df.to_csv(args.out_tsv, sep="\t", index=False)
     print(df.to_string(index=False))
 
-    # ---- Per-locus rate ratio plot --------------------------------------
+    # Per-locus rate ratio plot
     # Tests the hypothesis that introner loss shares a mechanism with regular
     # intron loss (loss-rate ratio ~ 1) while introner gain is its own process
     # (gain-rate ratio >> 1).
@@ -173,7 +173,6 @@ def main():
     fig_r.savefig(args.out_ratio_png, dpi=200, bbox_inches="tight")
     plt.close(fig_r)
 
-    # ---- 4-panel plot ----------------------------------------------------
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
     cls_color = {"introner": "tab:purple", "non_introner_intron": "tab:orange"}
 

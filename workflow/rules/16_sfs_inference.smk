@@ -1,41 +1,4 @@
-# ============================================================================
 # 16_sfs_inference.smk
-# Tree-free SFS-based inference of introner gain/loss dynamics
-#
-# Fits a single-population demographic model to the 4D-site SFS, then jointly
-# estimates per-locus-class gain rate (theta_lambda) and loss rate (theta_mu)
-# from the introner two-state SFS as a Poisson-Random-Field gain+loss mixture.
-# Compares introners against non-introner introns (the "control" locus class)
-# under matched samples and matched demographic background.
-#
-# Pipeline structure:
-#
-#   per subset (e.g. full_g1, cluster_0, cluster_1, inner_quartet):
-#     1. tabulate folded 4D SFS from upstream all-sites 4D VCF
-#     2. fit demography (constant + 2/3-epoch + growth + bottlegrowth) by AIC
-#     3. validate demography (Tajima's D / pi / theta_W vs Poisson sims)
-#
-#     for each locus class (introner, non_introner_intron):
-#       4. tabulate locus two-state SFS from genotype matrix
-#       5. fit Poisson gain/loss MLE using fitted demography
-#       6. (optional) bin-level monotonicity-constrained fit
-#
-#   aggregate:
-#     7. compare introners vs non-introner introns side-by-side
-#
-# Optional one-off diagnostics (not in default DAG):
-#     - check_g1_substructure  (PCA + F_ST on G1 4D SNPs)
-#     - pairwise_ibs           (within-cluster pairwise IBS)
-#
-# Dependencies:
-#   - results/genotyping/genotype_matrix.final.tsv (introner matrix)
-#   - results/evolution/non_introner_introns/intron_genotype_matrix.tsv
-#       (built by 13_non_introner_introns.smk)
-#   - 4D all-sites VCF for Group 1 (path configurable; default is the upstream
-#     introner-genotyping-pipeline output — see config["sfs_inference"]["fourd_vcf"])
-#
-# Conda env: workflow/envs/moments.yaml
-# ============================================================================
 
 SFS_DIR = EVOLUTION_DIR / "sfs_inference"
 SFS_SCRIPTS = str(PROJECT_ROOT / "scripts" / "evolution" / "sfs_inference")
@@ -73,9 +36,7 @@ wildcard_constraints:
     locus_class = "|".join(LOCUS_CLASSES),
 
 
-# ============================================================================
 # 4D SFS + demography (per subset)
-# ============================================================================
 
 rule sfs_tabulate_4d:
     """Tabulate folded 4D SFS for a sample subset from the upstream all-sites VCF."""
@@ -102,11 +63,7 @@ rule sfs_tabulate_4d:
 
 
 rule sfs_fit_demography:
-    """Fit constant + two/three-epoch + growth + bottlegrowth models, pick best by AIC.
-
-    Outputs a per-bin Pearson residuals TSV alongside the AIC table — these
-    residuals are how we originally diagnosed within-G1 substructure.
-    """
+    """Fit constant + two/three-epoch + growth + bottlegrowth models, pick best by AIC."""
     input:
         sfs = SFS_DIR / "{sfs_subset}" / "4d_sfs.npy",
     output:
@@ -128,9 +85,7 @@ rule sfs_fit_demography:
 
 
 rule sfs_validate_demography:
-    """Compare observed Tajima's D / pi / theta_W to Poisson-resampled simulations
-    under the fitted demography. Underestimates true coalescent variance, so a
-    rejection here is conservative."""
+    """Compare observed Tajima's D / pi / theta_W to Poisson-resampled simulations under the fitted demography."""
     input:
         sfs = SFS_DIR / "{sfs_subset}" / "4d_sfs.npy",
         demog = SFS_DIR / "{sfs_subset}" / "demography_best.pkl",
@@ -149,17 +104,10 @@ rule sfs_validate_demography:
         """
 
 
-# ============================================================================
 # Locus-class SFS (per subset, per locus class)
-# ============================================================================
 
 rule sfs_tabulate_introner:
-    """Tabulate the introner two-state SFS from the genotype matrix.
-
-    Applies the within_group_status ∈ {consistent, singleton} filter to
-    exclude low_identity orthologs (where parallel insertion is plausible)
-    and drops loci with any presence=3 (missing) call in the subset.
-    """
+    """Tabulate the introner two-state SFS from the genotype matrix."""
     input:
         matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
     output:
@@ -206,15 +154,10 @@ rule sfs_tabulate_non_introner_intron:
         """
 
 
-# ============================================================================
 # Gain/loss MLE (per subset, per locus class)
-# ============================================================================
 
 rule sfs_fit_gain_loss:
-    """Joint MLE of (theta_lambda, theta_mu) under the fitted demographic SFS shape.
-
-    Output: per-bin observed/expected, G-test goodness-of-fit, and a fit plot.
-    """
+    """Joint MLE of (theta_lambda, theta_mu) under the fitted demographic SFS shape."""
     input:
         sfs = SFS_DIR / "{sfs_subset}" / "{locus_class}" / "sfs.npy",
         summary = SFS_DIR / "{sfs_subset}" / "{locus_class}" / "sfs_summary.tsv",
@@ -238,13 +181,7 @@ rule sfs_fit_gain_loss:
 
 
 rule sfs_fit_bin_level:
-    """Bin-level (monotonicity-constrained) gain/loss MLE.
-
-    Alternative to the parametric model: relaxes the demography-conditional
-    SFS shape to per-bin alpha (gain) and beta (loss) under monotonicity
-    constraints. Reports an LP-based identification interval for the ratio
-    when the saturated MLE is reachable (the model is non-identified there).
-    """
+    """Bin-level (monotonicity-constrained) gain/loss MLE."""
     input:
         sfs = SFS_DIR / "{sfs_subset}" / "{locus_class}" / "sfs.npy",
         summary = SFS_DIR / "{sfs_subset}" / "{locus_class}" / "sfs_summary.tsv",
@@ -279,17 +216,10 @@ rule sfs_fit_bin_level:
         """
 
 
-# ============================================================================
 # Cross-locus-class comparison
-# ============================================================================
 
 rule sfs_compare_introner_vs_non_introner:
-    """Side-by-side introner vs non-introner intron comparison across subsets.
-
-    Aggregates all per-(subset, locus_class) fits and produces:
-      - results/evolution/sfs_inference/comparison/introner_vs_non_introner.tsv
-      - results/figures/introner_vs_non_introner_sfs.png
-    """
+    """Side-by-side introner vs non-introner intron comparison across subsets."""
     input:
         introner_estimates = expand(
             str(SFS_DIR / "{sfs_subset}" / "introner" / "theta_estimates.tsv"),
@@ -344,18 +274,10 @@ rule sfs_compare_introner_vs_non_introner:
         """
 
 
-# ============================================================================
 # Optional / one-off diagnostic rules — not in default DAG
-# ============================================================================
 
 rule sfs_check_g1_substructure:
-    """One-off diagnostic: PCA + Hudson F_ST on G1 4D segregating SNPs.
-
-    Used to discover the G1 substructure (5/6 cluster_0 vs cluster_1 split,
-    F_ST = 0.62) that motivates the cluster-based SFS subsets above.
-    Run manually:
-        snakemake --use-conda results/evolution/sfs_inference/g1_substructure/g1_pca_fst.png
-    """
+    """One-off diagnostic: PCA + Hudson F_ST on G1 4D segregating SNPs."""
     input:
         vcf = FOURD_VCF,
     output:
@@ -385,10 +307,7 @@ rule sfs_check_g1_substructure:
 
 
 rule sfs_pairwise_ibs:
-    """One-off diagnostic: pairwise IBS within a subset (e.g. cluster_1 to find
-    the inner-quartet vs outgroup-pair split). Run manually:
-        snakemake --use-conda results/evolution/sfs_inference/cluster_1/ibs_diagnostic.png
-    """
+    """One-off diagnostic: pairwise IBS within a subset (e.g."""
     input:
         vcf = FOURD_VCF,
     output:
@@ -412,13 +331,10 @@ rule sfs_pairwise_ibs:
         """
 
 
-# ============================================================================
 # Master target
-# ============================================================================
 
 rule sfs_inference_all:
-    """Build the full SFS inference pipeline: per-subset demography + per-class
-    SFS + gain/loss fits + comparison."""
+    """Build the full SFS inference pipeline: per-subset demography + per-class SFS + gain/loss fits + comparison."""
     input:
         comparison_tsv = SFS_DIR / "comparison" / "introner_vs_non_introner.tsv",
         comparison_png = FIGURES_DIR / "introner_vs_non_introner_sfs.png",

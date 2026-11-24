@@ -1,35 +1,17 @@
-# ============================================================
 # 00_data_prep.smk - Data Preparation Rules
-# ============================================================
-#
-# Prepares input data for downstream analysis:
-# - Index reference genomes
-# - Create genome dictionaries
-# - Validate input files
-# - Copy/link assembly files to results
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Paths from config
 ASSEMBLIES_SOURCE = Path(config["paths"]["assemblies"])
 CCMP1545_REF = Path(config["paths"]["references"]["ccmp1545"])
 RCC1749_REF = Path(config["paths"]["references"]["rcc1749"])
 
-# ============================================================
-# RULES
-# ============================================================
 
 rule copy_assemblies:
-    """
-    Copy or link sample assemblies (vg_paths.fa) to results directory
-    """
+    """Copy or link sample assemblies (vg_paths.fa) to results directory"""
     input:
         fa = ASSEMBLIES_SOURCE / "{sample}.vg_paths.fa"
     output:
@@ -41,9 +23,7 @@ rule copy_assemblies:
 
 
 rule index_assembly_fasta:
-    """
-    Index assembly FASTA with samtools faidx
-    """
+    """Index assembly FASTA with samtools faidx"""
     input:
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
     output:
@@ -55,9 +35,7 @@ rule index_assembly_fasta:
 
 
 rule index_assembly_bwa:
-    """
-    Create BWA index for assembly
-    """
+    """Create BWA index for assembly"""
     input:
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
     output:
@@ -74,9 +52,7 @@ rule index_assembly_bwa:
 
 
 rule index_assembly_blast:
-    """
-    Create BLAST database for assembly
-    """
+    """Create BLAST database for assembly"""
     input:
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
     output:
@@ -92,9 +68,7 @@ rule index_assembly_blast:
 
 
 rule copy_reference_genome:
-    """
-    Copy reference genome to results
-    """
+    """Copy reference genome to results"""
     input:
         ccmp1545 = CCMP1545_REF,
         rcc1749 = RCC1749_REF
@@ -110,9 +84,7 @@ rule copy_reference_genome:
 
 
 rule index_reference_bwa:
-    """
-    Create BWA index for reference genomes
-    """
+    """Create BWA index for reference genomes"""
     input:
         fa = ASSEMBLIES_DIR / "references" / "{ref}.fa"
     output:
@@ -124,9 +96,7 @@ rule index_reference_bwa:
 
 
 rule all_data_prep:
-    """
-    Target: Prepare all data (assemblies, indices)
-    """
+    """Target: Prepare all data (assemblies, indices)"""
     input:
         # All sample assemblies copied
         expand(ASSEMBLIES_DIR / "{sample}.vg_paths.fa", sample=ALL_SAMPLES),
@@ -142,9 +112,7 @@ rule all_data_prep:
 
 
 rule validate_inputs:
-    """
-    Validate that all required input files exist
-    """
+    """Validate that all required input files exist"""
     output:
         touch(RESULTS / ".inputs_validated")
     run:

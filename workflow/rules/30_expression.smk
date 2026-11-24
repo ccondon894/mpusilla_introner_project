@@ -1,25 +1,8 @@
-# ============================================================
 # 30_expression.smk - RNA-seq Expression Quantification
-# ============================================================
-#
-# Performs RNA-seq alignment and expression quantification:
-# 1. HISAT2 alignment of RNA-seq reads
-# 2. featureCounts gene-level quantification
-# 3. StringTie de novo transcript assembly & GTF augmentation
-# 4. SQANTI3 long-read isoform classification (R2C2 data)
-#
-# Adapted from:
-# - /scratch1/chris/introner-expression-analysis/rules/hisat_2.smk
-# - /scratch1/chris/introner-expression-analysis/rules/create_count_matrix.smk
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 EXPRESSION_DIR = RESULTS / "expression"
@@ -47,10 +30,6 @@ REPLICATES = {
 }
 
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
-
 def get_all_replicates():
     """Get flat list of all replicate names"""
     replicates = []
@@ -67,17 +46,10 @@ def get_sample_from_replicate(replicate):
     return None
 
 
-# ============================================================
 # HISAT2 INDEXING (per-sample)
-# ============================================================
 
 rule hisat2_index:
-    """
-    Build HISAT2 index for each sample's VG paths assembly.
-
-    Each strain is aligned to its own assembly so contig names
-    match the lifted-over GTF annotations.
-    """
+    """Build HISAT2 index for each sample's VG paths assembly."""
     input:
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
     output:
@@ -98,16 +70,10 @@ rule hisat2_index:
         """
 
 
-# ============================================================
 # RNA-SEQ ALIGNMENT (per-sample index)
-# ============================================================
 
 rule hisat2_align:
-    """
-    Align RNA-seq reads with HISAT2.
-
-    Each replicate is aligned to its parent strain's VG paths assembly.
-    """
+    """Align RNA-seq reads with HISAT2."""
     input:
         index_done = lambda wildcards: ALIGNMENT_DIR / f"hisat2_index_{get_sample_from_replicate(wildcards.replicate)}" / "index.done",
         r1 = lambda wildcards: RNA_SEQ_DIR / get_sample_from_replicate(wildcards.replicate) / f"{wildcards.replicate}_R1.fastq.gz",
@@ -137,17 +103,10 @@ rule hisat2_align:
         """
 
 
-# ============================================================
-# FEATURECOUNTS QUANTIFICATION
-# ============================================================
+# Featurecounts quantification
 
 rule featurecounts_per_sample:
-    """
-    Run featureCounts on individual BAM files.
-
-    Counts reads mapping to exons, summarized at gene level.
-    Uses each strain's own GTF to match VG paths contig names.
-    """
+    """Run featureCounts on individual BAM files."""
     input:
         bam = ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam",
         gtf = lambda wildcards: ANNOTATIONS_DIR / f"{get_sample_from_replicate(wildcards.replicate)}.gtf"
@@ -176,9 +135,7 @@ rule featurecounts_per_sample:
 
 
 rule merge_count_matrix:
-    """
-    Merge individual count files into a single count matrix.
-    """
+    """Merge individual count files into a single count matrix."""
     input:
         counts = expand(COUNTS_DIR / "{replicate}.counts.txt", replicate=get_all_replicates())
     output:
@@ -207,28 +164,10 @@ rule merge_count_matrix:
         result.to_csv(output.matrix)
 
 
-# ============================================================
-# STRINGTIE DE NOVO ANNOTATION
-# ============================================================
-# Augments lifted-over GTF annotations with de novo transcript
-# models assembled from RNA-seq data. This recovers genes that
-# were missed during miniprot-based liftover due to sequence
-# divergence or lineage-specific genes.
-#
-# Pipeline:
-# 1. Per-replicate guided assembly (stringtie_assemble)
-# 2. Merge assemblies per sample (stringtie_merge)
-# 3. Filter & augment the existing GTF (augment_gtf)
-# ============================================================
+# Stringtie de novo annotation
 
 rule stringtie_assemble:
-    """
-    Reference-guided transcript assembly per replicate.
-
-    Uses the existing lifted-over GTF as a guide (-G) so known
-    gene structures are preserved, while also assembling novel
-    transcripts from RNA-seq coverage in unannotated regions.
-    """
+    """Reference-guided transcript assembly per replicate."""
     input:
         bam = ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam",
         gtf = lambda wildcards: ANNOTATIONS_DIR / f"{get_sample_from_replicate(wildcards.replicate)}.gtf"
@@ -255,13 +194,7 @@ rule stringtie_assemble:
 
 
 rule stringtie_merge:
-    """
-    Merge per-replicate StringTie assemblies for each sample.
-
-    Combines transcript models across replicates to produce a
-    unified annotation. The existing GTF is included as a guide
-    so all original annotations are retained in the merged output.
-    """
+    """Merge per-replicate StringTie assemblies for each sample."""
     input:
         rep_gtfs = lambda wildcards: expand(
             STRINGTIE_DIR / "per_replicate" / "{replicate}.stringtie.gtf",
@@ -290,14 +223,7 @@ rule stringtie_merge:
 
 
 rule augment_gtf:
-    """
-    Filter novel StringTie transcripts and merge into existing GTF.
-
-    Identifies transcripts from StringTie that do NOT overlap any
-    existing annotation (novel genes), filters them by minimum
-    expression and structure, then appends them to the original GTF
-    to produce an augmented annotation.
-    """
+    """Filter novel StringTie transcripts and merge into existing GTF."""
     input:
         merged_gtf = STRINGTIE_DIR / "merged" / "{sample}.stringtie_merged.gtf",
         original_gtf = ANNOTATIONS_DIR / "{sample}.gtf"
@@ -443,16 +369,7 @@ rule augment_gtf:
 
 
 rule find_novel_orthologs:
-    """
-    BLASTX novel StringTie transcripts against CCMP1545 proteins
-    to identify orthologs, then rename gene_ids in the augmented GTF
-    to match the CCMP1545 gene names.
-
-    Produces:
-    - BLASTX results table
-    - Augmented GTF with CCMP1545 gene names for orthologs
-    - Ortholog mapping summary
-    """
+    """BLASTX novel StringTie transcripts against CCMP1545 proteins to identify orthologs, then rename gene_ids in the augmented GTF to match the CCMP1545 gene names."""
     input:
         novel_gtf = STRINGTIE_DIR / "novel" / "{sample}.novel_transcripts.gtf",
         augmented_gtf = ANNOTATIONS_DIR / "{sample}.augmented.gtf",
@@ -499,15 +416,7 @@ rule find_novel_orthologs:
 
 
 rule rename_novel_genes:
-    """
-    Rename novel gene_ids in the augmented GTF to match CCMP1545
-    orthologs identified by BLASTX.
-
-    For each novel transcript with a BLASTX hit, the gene_id is
-    updated to the CCMP1545 gene name (with _novel suffix to
-    distinguish from the miniprot-derived annotations). Transcripts
-    with no ortholog retain their StringTie MSTRG.* identifiers.
-    """
+    """Rename novel gene_ids in the augmented GTF to match CCMP1545 orthologs identified by BLASTX."""
     input:
         blastx = STRINGTIE_DIR / "orthologs" / "{sample}.blastx.tsv",
         augmented_gtf = ANNOTATIONS_DIR / "{sample}.augmented.gtf",
@@ -637,17 +546,10 @@ rule rename_novel_genes:
                 f.write(f"  {bracket}: {count}\n")
 
 
-# ============================================================
-# SQANTI3 LONG-READ ANALYSIS
-# ============================================================
+# Sqanti3 long-read analysis
 
 rule parse_sqanti3_output:
-    """
-    Parse SQANTI3 classification files for isoform analysis.
-
-    Extracts isoform classifications, structural categories, and
-    abundance information from R2C2 long-read data.
-    """
+    """Parse SQANTI3 classification files for isoform analysis."""
     input:
         # SQANTI3 classification files (pre-computed, copied to data/)
         ccmp1545 = PROJECT_ROOT / "data" / "sqanti3_output_834" / "834_isoforms_classification.filtered.txt",
@@ -673,17 +575,10 @@ rule parse_sqanti3_output:
         """
 
 
-# ============================================================
-# INTRONER SPLICE-BOUNDARY VERIFICATION
-# ============================================================
+# Introner splice-boundary verification
 
 rule extract_splice_junctions_regtools:
-    """
-    Extract RNA-seq splice junctions from existing HISAT2 BAMs.
-
-    RegTools reports BED12 records. Downstream scoring converts BED12
-    anchors back to exact intron/junction coordinates.
-    """
+    """Extract RNA-seq splice junctions from existing HISAT2 BAMs."""
     input:
         bam = ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam",
         bai = ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam.bai"
@@ -709,9 +604,7 @@ rule extract_splice_junctions_regtools:
 
 
 rule score_introner_splice_boundary_support:
-    """
-    Score introner splice-boundary support and retention PSI per sample.
-    """
+    """Score introner splice-boundary support and retention PSI per sample."""
     input:
         matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         junctions = lambda wildcards: expand(
@@ -761,9 +654,7 @@ rule score_introner_splice_boundary_support:
 
 
 rule merge_introner_splice_boundary_summaries:
-    """
-    Merge per-sample introner splice-boundary summaries.
-    """
+    """Merge per-sample introner splice-boundary summaries."""
     input:
         summaries = expand(INTRONER_SPLICE_DIR / "{sample}.summary.tsv", sample=RNA_SEQ_SAMPLES)
     output:
@@ -792,50 +683,33 @@ rule merge_introner_splice_boundary_summaries:
             writer.writerows(rows)
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule expression_complete:
-    """
-    Target: Complete expression quantification pipeline.
-    """
+    """Target: Complete expression quantification pipeline."""
     input:
         COUNTS_DIR / "merged_counts_matrix.csv",
         SQANTI_DIR / "parsed_sqanti3_data.tsv"
 
 
 rule alignment_only:
-    """
-    Target: Run HISAT2 alignments only.
-    """
+    """Target: Run HISAT2 alignments only."""
     input:
         expand(ALIGNMENT_DIR / "bams" / "{replicate}.sorted.bam", replicate=get_all_replicates())
 
 
 rule counts_only:
-    """
-    Target: Generate count matrix only.
-    """
+    """Target: Generate count matrix only."""
     input:
         COUNTS_DIR / "merged_counts_matrix.csv"
 
 
 rule stringtie_denovo:
-    """
-    Target: Run StringTie de novo annotation for all RNA-seq samples.
-
-    Produces augmented + renamed GTF files at
-    results/annotations/{sample}.augmented.renamed.gtf
-    """
+    """Target: Run StringTie de novo annotation for all RNA-seq samples."""
     input:
         expand(ANNOTATIONS_DIR / "{sample}.augmented.renamed.gtf", sample=RNA_SEQ_SAMPLES)
 
 
 rule introner_splice_boundary_verification:
-    """
-    Target: Verify introner splice boundaries and retention PSI from RNA-seq.
-    """
+    """Target: Verify introner splice boundaries and retention PSI from RNA-seq."""
     input:
         INTRONER_SPLICE_DIR / "all_samples.summary.tsv",
         expand(INTRONER_SPLICE_DIR / "{sample}.per_locus.tsv", sample=RNA_SEQ_SAMPLES),

@@ -1,28 +1,8 @@
-# ============================================================
 # 20_snp_calling.smk - SNP Calling with GATK HaplotypeCaller
-# ============================================================
-#
-# Performs joint SNP calling across all samples using GATK.
-# Uses haploid mode (--sample-ploidy 1) for M. pusilla.
-#
-# Pipeline:
-# 1. Index reference genome
-# 2. Add read groups to BAMs
-# 3. Run HaplotypeCaller per sample (GVCF mode)
-# 4. Combine GVCFs
-# 5. Joint genotyping
-#
-# Adapted from:
-# - /scratch1/chris/introner-genotyping-final/rules/call_haplotypes_to_CCMP1545.smk
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 SNP_DIR = RESULTS / "snp_popgen"
@@ -43,27 +23,16 @@ PLOIDY = config["params"]["gatk"]["ploidy"]
 # Samples to call variants on (exclude reference - it's added back as hom-ref in 21_snp_popgen)
 SNP_CALL_SAMPLES = [s for s in ALL_SAMPLES if s != REFERENCE]
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
 
 def get_source_bam(wildcards):
     """Get source BAM file for a sample"""
     return SOURCE_BAM_DIR / f"{wildcards.sample}.surject_to.CCMP1545.sorted.bam"
 
 
-# ============================================================
-# REFERENCE INDEXING
-# ============================================================
+# Reference indexing
 
 rule snp_index_reference:
-    """
-    Index the reference genome for GATK.
-
-    Creates:
-    - FASTA index (.fai)
-    - Sequence dictionary (.dict)
-    """
+    """Index the reference genome for GATK."""
     input:
         ref = SNP_REFERENCE
     output:
@@ -82,16 +51,10 @@ rule snp_index_reference:
         """
 
 
-# ============================================================
-# BAM PREPARATION
-# ============================================================
+# Bam preparation
 
 rule add_read_groups:
-    """
-    Add read group information to BAM files.
-
-    Required by GATK for proper sample identification.
-    """
+    """Add read group information to BAM files."""
     input:
         bam = get_source_bam
     output:
@@ -122,9 +85,7 @@ rule add_read_groups:
 
 
 rule index_rg_bam:
-    """
-    Index BAM files with read groups added.
-    """
+    """Index BAM files with read groups added."""
     input:
         bam = VCF_DIR / "bams" / "{sample}.rg.bam"
     output:
@@ -136,17 +97,10 @@ rule index_rg_bam:
         """
 
 
-# ============================================================
-# VARIANT CALLING
-# ============================================================
+# Variant calling
 
 rule haplotype_caller_gvcf:
-    """
-    Call variants per sample using GATK HaplotypeCaller in GVCF mode.
-
-    Uses haploid mode for M. pusilla.
-    GVCF format enables joint genotyping across samples.
-    """
+    """Call variants per sample using GATK HaplotypeCaller in GVCF mode."""
     input:
         bam = VCF_DIR / "bams" / "{sample}.rg.bam",
         bai = VCF_DIR / "bams" / "{sample}.rg.bam.bai",
@@ -178,9 +132,7 @@ rule haplotype_caller_gvcf:
 
 
 rule combine_gvcfs:
-    """
-    Combine individual GVCFs into a single multi-sample GVCF.
-    """
+    """Combine individual GVCFs into a single multi-sample GVCF."""
     input:
         gvcfs = expand(GVCF_DIR / "{sample}.g.vcf.gz", sample=SNP_CALL_SAMPLES),
         ref = VCF_DIR / "reference" / "CCMP1545_v3.fa"
@@ -203,11 +155,7 @@ rule combine_gvcfs:
 
 
 rule joint_genotyping:
-    """
-    Perform joint genotyping on combined GVCF.
-
-    Produces the final joint VCF with all variants.
-    """
+    """Perform joint genotyping on combined GVCF."""
     input:
         combined = VCF_DIR / "combined.g.vcf.gz",
         ref = VCF_DIR / "reference" / "CCMP1545_v3.fa"
@@ -229,11 +177,7 @@ rule joint_genotyping:
 
 
 rule joint_genotyping_all_sites:
-    """
-    Perform joint genotyping including non-variant sites.
-
-    Useful for downstream analyses requiring invariant site information.
-    """
+    """Perform joint genotyping including non-variant sites."""
     input:
         combined = VCF_DIR / "combined.g.vcf.gz",
         ref = VCF_DIR / "reference" / "CCMP1545_v3.fa"
@@ -255,14 +199,8 @@ rule joint_genotyping_all_sites:
         """
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule snp_calling_complete:
-    """
-    Target: Complete SNP calling pipeline.
-    """
+    """Target: Complete SNP calling pipeline."""
     input:
         VCF_DIR / "mpusilla.joint.vcf.gz",
         VCF_DIR / "mpusilla.joint.all_sites.vcf.gz"

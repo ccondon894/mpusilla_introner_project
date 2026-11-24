@@ -1,30 +1,8 @@
-# ============================================================
 # 03_gtf_liftover.smk - GTF Annotation Liftover
-# ============================================================
-#
-# Lifts over CCMP1545 reference annotations to all sample genomes
-# using miniprot protein-to-genome alignment.
-#
-# Steps:
-# 1. Extract reference proteins from CCMP1545 GTF
-# 2. Align proteins to each sample genome with miniprot
-# 3. Resolve paralog mappings
-# 4. Filter low-quality mappings
-# 5. Rename gene IDs to match reference
-#
-# NOTE: The annotate_introners step (update_gtf_with_introners.py)
-# has been REMOVED to eliminate circular dependency with genotype matrix.
-#
-# Adapted from: /scratch1/chris/introner-expression-analysis/rules/make_sample_gtfs.smk
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Reference files
 REF_GTF = Path(config["paths"]["references"].get("ccmp1545_gtf",
@@ -35,15 +13,9 @@ REF_GENOME = Path(config["paths"]["references"]["ccmp1545"])
 PROTEIN_DIR = RESULTS / "proteins"
 STATS_DIR = RESULTS / "annotations" / "stats"
 
-# ============================================================
-# RULES
-# ============================================================
 
 rule extract_reference_proteins:
-    """
-    Extract protein sequences from CCMP1545 reference annotation
-    using AGAT toolkit
-    """
+    """Extract protein sequences from CCMP1545 reference annotation using AGAT toolkit"""
     input:
         gtf = REF_GTF,
         genome = REF_GENOME
@@ -63,9 +35,7 @@ rule extract_reference_proteins:
 
 
 rule miniprot_align:
-    """
-    Align reference proteins to target genome with miniprot
-    """
+    """Align reference proteins to target genome with miniprot"""
     input:
         proteins = PROTEIN_DIR / "reference_proteins.fa",
         target_genome = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
@@ -79,10 +49,7 @@ rule miniprot_align:
 
 
 rule resolve_paralog_mappings:
-    """
-    Resolve cases where proteins map to multiple locations
-    Keeps the best mapping based on alignment scores
-    """
+    """Resolve cases where proteins map to multiple locations Keeps the best mapping based on alignment scores"""
     input:
         miniprot_gtf = ANNOTATIONS_DIR / "{sample}.miniprot.gtf",
         ref_gtf = REF_GTF,
@@ -102,9 +69,7 @@ rule resolve_paralog_mappings:
 
 
 rule filter_gtf:
-    """
-    Filter low-quality mappings from resolved GTF
-    """
+    """Filter low-quality mappings from resolved GTF"""
     input:
         gtf = ANNOTATIONS_DIR / "{sample}.miniprot.resolved.gtf",
         ref_gtf = REF_GTF
@@ -119,9 +84,7 @@ rule filter_gtf:
 
 
 rule rename_gene_ids:
-    """
-    Rename gene IDs to match reference annotation format
-    """
+    """Rename gene IDs to match reference annotation format"""
     input:
         gtf = ANNOTATIONS_DIR / "{sample}.filtered.gtf",
         ref_gtf = REF_GTF
@@ -137,9 +100,7 @@ rule rename_gene_ids:
 
 
 rule compute_gtf_stats:
-    """
-    Compute statistics comparing query GTF to reference
-    """
+    """Compute statistics comparing query GTF to reference"""
     input:
         query_gtf = ANNOTATIONS_DIR / "{sample}.gtf",
         ref_gtf = REF_GTF
@@ -161,9 +122,7 @@ rule compute_gtf_stats:
 
 
 rule all_gtf_liftover:
-    """
-    Target: Generate all GTF annotations
-    """
+    """Target: Generate all GTF annotations"""
     input:
         expand(ANNOTATIONS_DIR / "{sample}.gtf", sample=ALL_SAMPLES),
         expand(STATS_DIR / "{sample}_basic_stats.tsv", sample=ALL_SAMPLES)

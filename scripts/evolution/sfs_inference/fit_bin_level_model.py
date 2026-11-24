@@ -31,10 +31,6 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize, linprog
 
 
-# ---------------------------------------------------------------------------
-# Solver
-# ---------------------------------------------------------------------------
-
 try:
     import cvxpy as cp
     _CVXPY_AVAILABLE = True
@@ -254,10 +250,6 @@ def _isotonic_increasing(x, ensure_nonneg=True):
     return x
 
 
-# ---------------------------------------------------------------------------
-# Core MLE
-# ---------------------------------------------------------------------------
-
 def _fit_once(sfs_obs, prefer_cvxpy=True):
     """Single fit. Returns (alpha, beta, status)."""
     if prefer_cvxpy and _CVXPY_AVAILABLE:
@@ -371,7 +363,7 @@ def fit_bin_level_mle(
     total = float(sfs_obs.sum())
     warnings = []
 
-    # ---- Identifiability: is the saturated MLE reachable? ---------------
+    # Identifiability: is the saturated MLE reachable?
     # The saturated MLE alpha+beta = obs is reachable iff obs is decomposable
     # as a non-increasing alpha plus non-decreasing beta with both ≥ 0. This
     # is data-dependent: for U-shaped or monotone obs, it's reachable; for
@@ -379,7 +371,7 @@ def fit_bin_level_mle(
     interval = ratio_identification_interval(sfs_obs)
 
     if interval is not None:
-        # ---- Saturated reachable: model is non-identified ---------------
+        # Saturated reachable: model is non-identified
         N_gain_min, N_gain_max, alpha_lp_min, alpha_lp_max, _ = interval
         saturated_reachable = True
 
@@ -398,7 +390,7 @@ def fit_bin_level_mle(
                 "saturated MLE is reachable — unusual; check inputs"
             )
     else:
-        # ---- Saturated NOT reachable: model identified, use SLSQP -------
+        # Saturated NOT reachable: model identified, use SLSQP
         saturated_reachable = False
         alpha_lp_min = None
         alpha_lp_max = None
@@ -440,7 +432,7 @@ def fit_bin_level_mle(
             f"({n_active}/{2 * (m - 1)})"
         )
 
-    # ---- Parametric bootstrap on the identification interval ------------
+    # Parametric bootstrap on the identification interval
     # Each bootstrap replicate generates a new SFS via Poisson resampling of
     # the canonical fit, then computes the LP identification interval for
     # that replicate. We report the bootstrap distribution of:
@@ -585,10 +577,6 @@ def fit_bin_level_mle(
     }
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--sfs", required=True,
@@ -649,11 +637,9 @@ def main():
     print(f"  active constraints: {fit['n_active_constraints']}  "
           f"effective params: {fit['n_params_effective']}", file=sys.stderr)
 
-    # ---- Write pickle ---------------------------------------------------
     with open(args.out_pkl, "wb") as fh:
         pickle.dump(fit, fh)
 
-    # ---- Per-bin TSV ----------------------------------------------------
     rows = []
     for i in range(fit["m"]):
         rows.append({
@@ -669,7 +655,6 @@ def main():
         })
     pd.DataFrame(rows).to_csv(args.out_tsv, sep="\t", index=False, float_format="%.6g")
 
-    # ---- Summary JSON ---------------------------------------------------
     summary_out = {
         "n": fit["n"],
         "n_segregating": int(sfs_seg.sum()),
@@ -698,14 +683,12 @@ def main():
     with open(args.out_summary, "w") as fh:
         json.dump(summary_out, fh, indent=2)
 
-    # ---- Warnings file --------------------------------------------------
     with open(args.out_warnings, "w") as fh:
         if fit["warnings"]:
             fh.write("\n".join(fit["warnings"]) + "\n")
         else:
             fh.write("(no warnings)\n")
 
-    # ---- Residuals plot -------------------------------------------------
     bins = np.arange(1, fit["m"] + 1)
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.bar(bins - 0.18, fit["alpha"], width=0.36,
@@ -741,7 +724,6 @@ def main():
     fig.savefig(args.out_plot, dpi=200)
     plt.close(fig)
 
-    # ---- Comparison TSV (optional) -------------------------------------
     if args.out_comparison and args.parametric_estimates:
         param = pd.read_csv(args.parametric_estimates, sep="\t")
         param_kv = dict(zip(param["key"], param["value"]))

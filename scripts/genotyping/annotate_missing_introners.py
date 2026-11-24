@@ -176,7 +176,7 @@ def extract_sequence_from_genome(sample, contig, start, end, genomes, flanking_l
     return full_seq, True
 
 
-# ==================== Consensus Building Functions (from validate_introners.py) ====================
+# Consensus Building Functions
 
 def extract_introner_sequences(ref_dir, family_file):
     """Extract introner sequences (lowercase parts) from reference file"""
@@ -331,7 +331,7 @@ def build_consensus_sequences(ref_dir, mafft_path='mafft'):
     return consensus_sequences
 
 
-# ==================== Sequence Similarity Functions (from validate_introners.py) ====================
+# Sequence Similarity Functions
 
 def process_alignment(alignment, seq1, seq2, similarity_cutoff=0.7, coverage_cutoff=0.8):
     """Process alignment to extract similarity and coverage metrics"""

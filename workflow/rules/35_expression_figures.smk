@@ -98,7 +98,7 @@ rule plot_functional_associations:
         colors = PROJECT_ROOT / "master_figure_color_guide.tsv",
         isoform = ISOFORM_MODEL_DIR / "conditional_poisson_coefficients.tsv",
         robustness = ISOFORM_MODEL_DIR / "within_between_negative_binomial.tsv",
-        between = FUNCTIONAL_DIR / "r2c2_between_gene/model_coefficients.tsv",
+        between = FUNCTIONAL_DIR / "between_gene/model_coefficients.tsv",
         gain = GAIN_MODEL_DIR / "gain_effect.tsv",
         nmd = FUNCTIONAL_DIR / "adjusted_nmd/model_coefficients.tsv",
         nmd_data = FUNCTIONAL_DIR / "adjusted_nmd/nmd_gene_strain_data.tsv",
@@ -117,34 +117,6 @@ rule plot_functional_associations:
         python {input.script:q} --project-root {PROJECT_ROOT:q} --output {output.figure:q} > {log:q} 2>&1
         """
 
-rule audit_r2c2_quantification:
-    input:
-        script = EXPRESSION_SCRIPT_DIR / "r2c2_expression/compare_834_quant_versions.py",
-        source = R2C2_QUANT_DIR / "09092025_834_Isoforms.filtered.clean.quant",
-        candidates = sorted(R2C2_ISOFORM_DIR.glob("*834*clean.quant*")) + sorted(R2C2_ISOFORM_DIR.glob("new_834*/**/Isoforms.filtered.clean.quant")),
-        classifications = sorted((R2C2_ISOFORM_DIR / "sqanti3_output_834").glob("834_isoforms_classification.filtered.txt*")),
-        sqanti = RAW_SQANTI[0],
-        crosswalk = R2C2_DATA / "isoform_gene_crosswalk.tsv"
-    output:
-        summary = FUNCTIONAL_DIR / "quantification_audit/summary.txt",
-        files = FUNCTIONAL_DIR / "quantification_audit/file_comparison.tsv",
-        assignments = FUNCTIONAL_DIR / "quantification_audit/all_isoform_assignments.tsv",
-        changes = FUNCTIONAL_DIR / "quantification_audit/changed_gene_labels.tsv",
-        sqanti = FUNCTIONAL_DIR / "quantification_audit/sqanti_comparison.tsv"
-    params:
-        outdir = FUNCTIONAL_DIR / "quantification_audit"
-    log:
-        EXPRESSION_LOG_DIR / "audit_r2c2_quantification.log"
-    conda: "../envs/glm_modeling.yaml"
-    shell:
-        """
-        mkdir -p {params.outdir:q} $(dirname {log:q})
-        export TMPDIR=/scratch1/chris/tmp
-        python {input.script:q} --project-root {PROJECT_ROOT:q} \
-            --comparison-dir {R2C2_ISOFORM_DIR:q} --source {input.source:q} \
-            --crosswalk {input.crosswalk:q} --outdir {params.outdir:q} > {log:q} 2>&1
-        """
-
 rule expression_analysis_complete:
     input:
         rules.expression_models.input,
@@ -161,15 +133,7 @@ rule expression_analysis_complete:
         FUNCTIONAL_DIR / "adjusted_retention_rates" / "adjusted_class_retention_rates.tsv",
         FUNCTIONAL_DIR / "depth_retention_psi" / "per_locus_depth_psi.tsv",
         FUNCTIONAL_DIR / "adjusted_nmd" / "model_coefficients.tsv",
-        FUNCTIONAL_DIR / "group1_polymorphic_expression_pilot/models" / "test_a_coefficients.tsv",
-        FUNCTIONAL_DIR / "r2c2_total_burden_expression_pilot/models" / "test_a_coefficients.tsv",
-        FUNCTIONAL_DIR / "short_read_models" / "model_coefficients.tsv",
-        FUNCTIONAL_DIR / "paired_introner_expression" / "model_coefficients.tsv",
-        FUNCTIONAL_DIR / "current_burden_r2c2" / "model_coefficients.tsv",
-        FUNCTIONAL_DIR / "current_burden_short_read_matched" / "model_coefficients.tsv",
-        FUNCTIONAL_DIR / "r2c2_group1_gain" / "model_coefficients.tsv",
-        FUNCTIONAL_DIR / "single_locus_expression" / "model_coefficients.tsv",
         rules.paper_isoform_figures.input,
         FUNCTIONAL_DIR / "isoform_candidates/pairwise_1614_isoform_gene_candidates.tsv",
         FIGURES_DIR / "functional_associations.png",
-        FUNCTIONAL_DIR / "r2c2_between_gene/model_coefficients.tsv"
+        FUNCTIONAL_DIR / "between_gene/model_coefficients.tsv"

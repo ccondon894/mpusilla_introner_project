@@ -124,9 +124,7 @@ def process_input_fasta(input_fasta, flanking_length):
     return putative_introners
 
 
-# ============================================================
-# BLAST-BASED FAMILY CLASSIFICATION
-# ============================================================
+# Blast-based family classification
 
 def build_blast_database(ref_dir, makeblastdb_path, tmp_dir):
     """
@@ -320,9 +318,7 @@ def assign_families(blast_df, putative_introners, identity_cutoff, coverage_cuto
     return assignments
 
 
-# ============================================================
-# SPATIAL VALIDATION (bug-fixed)
-# ============================================================
+# Spatial validation
 
 def setup_gtf_db(gtf_file):
     """Create a database from GTF file for gene annotation queries."""
@@ -441,10 +437,6 @@ def check_splice_sites(introner_seq):
     return has_valid_sites, five_prime_site, five_prime_pos, three_prime_pos
 
 
-# ============================================================
-# VALIDATION PIPELINE
-# ============================================================
-
 def validate_introners(putative_introners, family_assignments, gtf_db, flanking_length=100):
     """
     Validate putative introners:
@@ -510,10 +502,6 @@ def validate_introners(putative_introners, family_assignments, gtf_db, flanking_
 
     return results
 
-
-# ============================================================
-# OUTPUT
-# ============================================================
 
 def write_log_file(results, output_log, identity_cutoff, coverage_cutoff):
     """Write validation results to TSV log file."""
@@ -615,10 +603,6 @@ def write_filtered_fasta(results, output_fasta):
 
     logging.info(f"Wrote {len(valid_records)} valid introners to {output_fasta}")
 
-
-# ============================================================
-# MAIN
-# ============================================================
 
 def main():
     args = parse_args()

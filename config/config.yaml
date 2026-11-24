@@ -78,7 +78,7 @@ paths:
   original:
     reads: "/scratch1/alex/pusilla/data/reads"
     rna_seq: "/storage1/chris/introner_RNA_seq/fastq"
-    r2c2_bams: "/scratch2/russ/introner/splicing_fails/isoforms/expression_differences/realign_r2c2_consensus"
+    r2c2_bams: "/storage1/chris/current_20250630_KK_Russ_Sample_1/realigned_bams"
 
   # Reference genomes
   references:
@@ -302,5 +302,5 @@ mating_type_region:
   end: 1730591
 
 # Filtered R2C2 isoform counts used by the expression analyses.
-r2c2_quant_dir: "/scratch2/russ/introner/splicing_fails/isoforms/sensitiveIsoforms"
+r2c2_quant_dir: "/storage1/chris/current_20250630_KK_Russ_Sample_1"
 r2c2_isoform_dir: "/scratch1/chris/introner-expression-analysis/R2C2_data/sensitiveIsoforms"

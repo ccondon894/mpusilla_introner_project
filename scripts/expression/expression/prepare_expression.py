@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""R2C2 replication of the existing expression pilot, with matched short-read fits.
 
-Uses the original fitting functions; R2C2 exposure is size factor only. Gene
-features and short-read observations come from the verified September 9 pilot.
-"""
 from __future__ import annotations
 
 import os
@@ -22,11 +18,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-ROOT = Path(__file__).resolve().parents[3]
-ORIGINAL = ROOT / "scripts/expression/negative_binomial_expression_pilot"
-sys.path.insert(0, str(ORIGINAL))
-import fit_expression_pilot_models as fit
-from prepare_expression_pilot_data import median_ratio_size_factors, reference_gene_table
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parents[2]
+sys.path.insert(0, str(SCRIPT_DIR))
+import expression_model_helpers as fit
+from prepare_short_read_expression import median_ratio_size_factors, reference_gene_table
 
 SAMPLES = {"834": "CCMP1545", "1614": "RCC1614", "1749": "RCC1749"}
 RCC1749_MT_START = 25000
@@ -54,16 +50,15 @@ def normalize(data, long_reads):
     data["offset_median_ratio"] = np.log(data.median_ratio_size_factor * exposure_length)
     data["offset_library"] = np.log(data.library_size_factor * exposure_length)
     data["normalized_expression"] = data.raw_count / np.exp(data.offset_median_ratio)
-    # Required by the original log-expression sensitivity helper. For R2C2 this
-    # is log normalized counts, NOT counts per kb; only this adapter uses the name.
+    # Required by the original log-expression sensitivity helper. 
     data["log1p_normalized_count_per_kb"] = np.log1p(data.normalized_expression)
     return data, normalization.reset_index(), n
 
 
 def prepare(quant_dir, out, source):
     base = pd.read_csv(source, sep="\t")
-    paths = [source, Path(__file__), ORIGINAL / "fit_expression_pilot_models.py",
-             ORIGINAL / "prepare_expression_pilot_data.py"]
+    paths = [source, Path(__file__), SCRIPT_DIR / "expression_model_helpers.py",
+             SCRIPT_DIR / "prepare_short_read_expression.py"]
     mt = set()
     for strain in ["CCMP1545", "RCC1749"]:
         path = ROOT / f"results/annotations/{strain}.gtf"
@@ -80,7 +75,9 @@ def prepare(quant_dir, out, source):
     covariates = base.drop(columns=stale)
     frames, audits, crosswalks = [], [], []
     for label, strain in SAMPLES.items():
-        qp = quant_dir / f"09092025_{label}_Isoforms.filtered.clean.quant"
+        qp = quant_dir / f"new_{label}_remando" / "Isoforms.filtered.clean.quant"
+        if not qp.exists():
+            qp = quant_dir / f"09092025_{label}_Isoforms.filtered.clean.quant"
         sp = ROOT / f"data/sqanti3_output_{label}/{label}_isoforms_classification.filtered.txt"
         paths.extend([qp, sp])
         q = pd.read_csv(qp, sep="\t")

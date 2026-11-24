@@ -172,7 +172,7 @@ def main():
     fixed_ratio = (fixed_present / fixed_absent) if fixed_absent > 0 else float("inf")
     fitted_ratio = theta_lambda_hat / theta_mu_hat
 
-    # ---- Write theta_estimates.tsv ---------------------------------------
+    # Write theta_estimates.tsv
     with open(args.estimates, "w") as fh:
         fh.write("key\tvalue\n")
         fh.write(f"demog_model\t{demog['model']}\n")
@@ -204,7 +204,7 @@ def main():
             fh.write(f"P_gain[i={i}]\t{pg:.6g}\n")
             fh.write(f"P_loss[i={i}]\t{pl:.6g}\n")
 
-    # ---- Write goodness-of-fit TSV ---------------------------------------
+    # Write goodness-of-fit TSV
     with open(args.gof, "w") as fh:
         fh.write(
             "present_count\tobserved\texpected_gain\texpected_loss\texpected_total"
@@ -222,7 +222,6 @@ def main():
         for i, (po, pe) in enumerate(zip(pooled_obs, pooled_exp)):
             fh.write(f"{i}\t{po:.6g}\t{pe:.6g}\n")
 
-    # ---- Plot --------------------------------------------------------------
     bins = np.arange(1, n)
     width = 0.35
     fig, ax = plt.subplots(figsize=(10, 5))

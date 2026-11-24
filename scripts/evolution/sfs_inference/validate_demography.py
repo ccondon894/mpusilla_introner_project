@@ -173,7 +173,6 @@ def main():
         for k, v in rows:
             fh.write(f"{k}\t{v}\n")
 
-    # ---- 3-panel histogram plot ------------------------------------------
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     panels = [
         ("pi", rep_pi, obs_stats["pi"], exp_stats["pi"]),

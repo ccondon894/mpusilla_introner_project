@@ -37,9 +37,7 @@ from scipy.stats import fisher_exact
 from pathlib import Path
 
 
-# ============================================================
-# CORE ANALYSIS FUNCTIONS (preserved from original)
-# ============================================================
+# Core analysis functions
 
 def save_figures_with_png(figures, output_path):
     """Write a multi-page PDF and a single PNG contact sheet of the same figures."""
@@ -398,10 +396,6 @@ def analyze_data(df, gene_exons, introners_by_chrom, categories,
         'multi_exon_df': multi_exon
     }
 
-
-# ============================================================
-# MODE IMPLEMENTATIONS
-# ============================================================
 
 def run_default_mode(args):
     """Default mode: analyze merged SQANTI3 data with single GTF + BED."""

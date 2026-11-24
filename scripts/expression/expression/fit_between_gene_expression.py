@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fit the R2C2 within/between-gene NB-GEE association reported in Figure 5B."""
 import argparse
+import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from prepare_r2c2_expression import fit
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import expression_model_helpers as fit
 
 
 def main():

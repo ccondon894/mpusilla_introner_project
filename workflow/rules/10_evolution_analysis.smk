@@ -1,35 +1,10 @@
-# ============================================================
 # 10_evolution_analysis.smk - Evolution & Diversity Analysis
-# ============================================================
-#
-# Analyzes evolutionary patterns around introner insertion sites
-# by examining flanking sequence diversity.
-#
-# Contains two analysis modes:
-# 1. All-Samples Analysis: Compares fixation patterns between Group1/Group2
-# 2. Group1 Analysis: Frequency-based polymorphism analysis within Group1
-#
-# Steps:
-# - Build consensus sequences from read alignments
-# - Classify orthologs by presence/absence patterns
-# - Align flanking regions with MAFFT
-# - Calculate nucleotide diversity (π) and between-group divergence (dxy)
-# - Generate visualization plots
-#
-# Adapted from:
-# - /scratch1/chris/introner-genotyping-pipeline/rules/all_samples_evolution_analysis.smk
-# - /scratch1/chris/introner-genotyping-pipeline/rules/group1_evolution_analysis.smk
-#
-# ============================================================
 
 import os
 import glob
 import json
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 EVOLUTION_DIR = RESULTS / "evolution"
@@ -74,10 +49,6 @@ wildcard_constraints:
     group = "group1|group2",
     state = "present|absent"
 
-
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
 
 def _collect_all_samples_alignment_files(classification_file, flank_length):
     """Return alignment files whose source .fa was actually written.
@@ -173,17 +144,10 @@ def get_group1_alignment_files(wildcards):
     return _collect_group1_alignment_files(classification_file, wildcards.flank_length)
 
 
-# ============================================================
-# CONSENSUS SEQUENCE BUILDING
-# ============================================================
+# Consensus sequence building
 
 rule make_evolution_bed_files:
-    """
-    Create BED files for flanking regions around introner loci.
-
-    Extracts coordinates for left and right flanking regions at
-    specified lengths (100bp, 200bp) for each sample.
-    """
+    """Create BED files for flanking regions around introner loci."""
     input:
         matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
@@ -199,14 +163,7 @@ rule make_evolution_bed_files:
 
 
 rule evolution_mpileup:
-    """
-    Generate mpileup for flanking regions to build consensus.
-
-    Uses bcftools mpileup with quality filters:
-    -d 100: max depth
-    -q 30: min mapping quality
-    -Q 20: min base quality
-    """
+    """Generate mpileup for flanking regions to build consensus."""
     input:
         bam = COVERAGE_BAM_DIR / "{sample}.sorted.bam",
         bed = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.bed",
@@ -230,11 +187,7 @@ rule evolution_mpileup:
 
 
 rule evolution_call_variants:
-    """
-    Call variants from mpileup for consensus building.
-
-    Uses haploid mode (--ploidy 1) and filters for depth >= 10.
-    """
+    """Call variants from mpileup for consensus building."""
     input:
         mpileup = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.mpileup.bcf",
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
@@ -252,12 +205,7 @@ rule evolution_call_variants:
 
 
 rule build_sample_consensus:
-    """
-    Build consensus sequences for flanking regions.
-
-    Applies variants from filtered VCF to reference to create
-    sample-specific consensus sequences for each locus.
-    """
+    """Build consensus sequences for flanking regions."""
     input:
         filt_vcf = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.filtered.vcf.gz",
         bed = CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.bed",
@@ -278,9 +226,7 @@ rule build_sample_consensus:
 
 
 rule build_ref_consensus:
-    """
-    Extract reference consensus sequences (no variant calling needed).
-    """
+    """Extract reference consensus sequences (no variant calling needed)."""
     input:
         bed = CONSENSUS_DIR / f"{REFERENCE}.loci.{{side}}_flank_{{flank_length}}bp.bed",
         fa = ASSEMBLIES_DIR / f"{REFERENCE}.vg_paths.fa"
@@ -294,9 +240,7 @@ rule build_ref_consensus:
 
 
 rule make_introner_body_bed:
-    """
-    Create BED files for present introner bodies, excluding 100 bp matrix flanks.
-    """
+    """Create BED files for present introner bodies, excluding 100 bp matrix flanks."""
     input:
         matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
@@ -311,9 +255,7 @@ rule make_introner_body_bed:
 
 
 rule introner_body_mpileup:
-    """
-    Generate mpileup for non-reference introner bodies.
-    """
+    """Generate mpileup for non-reference introner bodies."""
     input:
         bam = COVERAGE_BAM_DIR / "{sample}.sorted.bam",
         bed = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.bed",
@@ -337,9 +279,7 @@ rule introner_body_mpileup:
 
 
 rule introner_body_call_variants:
-    """
-    Call haploid variants for non-reference introner-body consensus.
-    """
+    """Call haploid variants for non-reference introner-body consensus."""
     input:
         mpileup = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.mpileup.bcf",
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
@@ -359,9 +299,7 @@ rule introner_body_call_variants:
 
 
 rule build_introner_body_consensus:
-    """
-    Build non-reference introner-body consensus FASTA from filtered variants.
-    """
+    """Build non-reference introner-body consensus FASTA from filtered variants."""
     input:
         filt_vcf = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz",
         filt_index = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.filtered.vcf.gz.tbi",
@@ -382,9 +320,7 @@ rule build_introner_body_consensus:
 
 
 rule build_ref_introner_body_consensus:
-    """
-    Extract reference introner-body sequences directly from the reference assembly.
-    """
+    """Extract reference introner-body sequences directly from the reference assembly."""
     input:
         bed = INTRONER_BODY_CONSENSUS_DIR / f"{REFERENCE}.introner_body.bed",
         fa = ASSEMBLIES_DIR / f"{REFERENCE}.vg_paths.fa"
@@ -397,9 +333,7 @@ rule build_ref_introner_body_consensus:
 
 
 rule qc_introner_body_consensus:
-    """
-    Apply strict repetitive-region QC to non-reference introner-body consensus.
-    """
+    """Apply strict repetitive-region QC to non-reference introner-body consensus."""
     input:
         bed = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.bed",
         cons = INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.consensus.fa",
@@ -423,9 +357,7 @@ rule qc_introner_body_consensus:
 
 
 rule qc_ref_introner_body_consensus:
-    """
-    Mark reference introner-body consensus sequences as reference-derived QC pass.
-    """
+    """Mark reference introner-body consensus sequences as reference-derived QC pass."""
     input:
         bed = INTRONER_BODY_CONSENSUS_DIR / f"{REFERENCE}.introner_body.bed",
         cons = INTRONER_BODY_CONSENSUS_DIR / f"{REFERENCE}.introner_body.consensus.fa",
@@ -445,9 +377,7 @@ rule qc_ref_introner_body_consensus:
 
 
 rule aggregate_introner_body_consensus_qc:
-    """
-    Combine per-sample introner-body QC tables.
-    """
+    """Combine per-sample introner-body QC tables."""
     input:
         qcs = expand(INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.qc.tsv", sample=ALL_SAMPLES)
     output:
@@ -458,24 +388,10 @@ rule aggregate_introner_body_consensus_qc:
         """
 
 
-
-
-
-# ============================================================
 # ALL-SAMPLES ANALYSIS (Group1 vs Group2 Fixation Patterns)
-# ============================================================
 
 checkpoint classify_all_samples_orthologs:
-    """
-    Classify orthologs by fixation status between Group1 and Group2.
-
-    Categories:
-    - group1_fixed_group2_absent: Fixed in Group1, absent in Group2
-    - group1_absent_group2_fixed: Absent in Group1, fixed in Group2
-    - group1_fixed_group2_fixed: Fixed in both groups
-
-    Creates FASTA files for each ortholog grouped by category.
-    """
+    """Classify orthologs by fixation status between Group1 and Group2."""
     input:
         fastas = expand(
             CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.consensus.fa",
@@ -503,9 +419,7 @@ checkpoint classify_all_samples_orthologs:
 
 
 rule align_all_samples_groups:
-    """
-    Align flanking sequences within each group using MAFFT.
-    """
+    """Align flanking sequences within each group using MAFFT."""
     input:
         fasta = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.{group}.{side}_flank_{flank_length}bp.fa"
     output:
@@ -519,9 +433,7 @@ rule align_all_samples_groups:
 
 
 rule align_all_samples_combined:
-    """
-    Create combined alignments for between-group divergence (dxy) calculation.
-    """
+    """Create combined alignments for between-group divergence (dxy) calculation."""
     input:
         group1 = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.group1.{side}_flank_{flank_length}bp.fa",
         group2 = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.{category}.group2.{side}_flank_{flank_length}bp.fa"
@@ -536,13 +448,7 @@ rule align_all_samples_combined:
 
 
 rule calculate_all_samples_diversity:
-    """
-    Calculate diversity metrics (π, dxy) for all-samples analysis.
-
-    Computes:
-    - Within-group nucleotide diversity (π) for Group1 and Group2
-    - Between-group divergence (dxy)
-    """
+    """Calculate diversity metrics (π, dxy) for all-samples analysis."""
     input:
         alignment_files = get_all_samples_alignment_files
     output:
@@ -563,10 +469,7 @@ rule calculate_all_samples_diversity:
 
 
 rule calculate_shared_introner_body_dxy:
-    """
-    Calculate introner-body Dxy for fixed shared loci using active all-samples
-    classification classes.
-    """
+    """Calculate introner-body Dxy for fixed shared loci using active all-samples classification classes."""
     input:
         classification = _EVO_ALIGNMENT_DIR / "all_samples_classification_{flank_length}bp.json",
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
@@ -596,9 +499,7 @@ rule calculate_shared_introner_body_dxy:
 
 
 rule plot_all_samples_analysis:
-    """
-    Generate the combined all-samples diversity plot.
-    """
+    """Generate the combined all-samples diversity plot."""
     input:
         metrics = DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
         body_dxy = _EVO_DIVERSITY_DIR / "shared_introner_body_dxy_{flank_length}bp.tsv",
@@ -619,17 +520,10 @@ rule plot_all_samples_analysis:
         """
 
 
-# ============================================================
 # GROUP1 ANALYSIS (Frequency-Based Polymorphism)
-# ============================================================
 
 checkpoint classify_group1_orthologs:
-    """
-    Classify Group1 orthologs by frequency (1-10 out of 11 samples).
-
-    For polymorphic introners within Group1, creates FASTA files
-    separating samples where introner is present vs absent.
-    """
+    """Classify Group1 orthologs by frequency (1-10 out of 11 samples)."""
     input:
         fastas = expand(
             CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.consensus.fa",
@@ -655,9 +549,7 @@ checkpoint classify_group1_orthologs:
 
 
 rule align_group1_frequency_groups:
-    """
-    Align flanking sequences for present/absent sample sets.
-    """
+    """Align flanking sequences for present/absent sample sets."""
     input:
         fasta = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.{state}.{side}_flank_{flank_length}bp.fa"
     output:
@@ -671,9 +563,7 @@ rule align_group1_frequency_groups:
 
 
 rule align_group1_combined:
-    """
-    Create combined alignments for present vs absent comparison.
-    """
+    """Create combined alignments for present vs absent comparison."""
     input:
         present = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.present.{side}_flank_{flank_length}bp.fa",
         absent = ALIGNMENT_DIR / "{flank_length}bp" / "{ortholog_id}.freq_{freq}.absent.{side}_flank_{flank_length}bp.fa"
@@ -688,12 +578,7 @@ rule align_group1_combined:
 
 
 rule calculate_group1_diversity:
-    """
-    Calculate diversity metrics for Group1 frequency analysis.
-
-    Computes π separately for present vs absent sample sets
-    at each frequency category.
-    """
+    """Calculate diversity metrics for Group1 frequency analysis."""
     input:
         alignment_files = get_group1_alignment_files
     output:
@@ -714,9 +599,7 @@ rule calculate_group1_diversity:
 
 
 rule plot_group1_frequency_lines:
-    """
-    Generate frequency-based line plots for Group1 analysis.
-    """
+    """Generate frequency-based line plots for Group1 analysis."""
     input:
         metrics = DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv"
     output:
@@ -734,9 +617,7 @@ rule plot_group1_frequency_lines:
 
 
 rule plot_group1_box_plots:
-    """
-    Generate box plots for Group1 frequency analysis.
-    """
+    """Generate box plots for Group1 frequency analysis."""
     input:
         metrics = DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv"
     output:
@@ -753,18 +634,10 @@ rule plot_group1_box_plots:
         """
 
 
-# ============================================================
-# INTRONER BODY SEQUENCE DECAY
-# ============================================================
+# Introner body sequence decay
 
 rule analyze_introner_body_decay:
-    """
-    Compare introner-body sequence decay between fixed-present and polymorphic introners.
-
-    The primary analysis is Group 1 fixed-present versus complete-call
-    polymorphic introners in the three largest present-introner families.
-    Group 2 is emitted as a low-power secondary comparison.
-    """
+    """Compare introner-body sequence decay between fixed-present and polymorphic introners."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         consensus = expand(INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.consensus.fa", sample=ALL_SAMPLES),
@@ -802,9 +675,7 @@ rule analyze_introner_body_decay:
 
 
 rule summarize_introner_body_decay_tail:
-    """
-    Summarize high-pi polymorphic tail loci and frequency-level body decay.
-    """
+    """Summarize high-pi polymorphic tail loci and frequency-level body decay."""
     input:
         per_locus = INTRONER_BODY_DECAY_DIR / "introner_body_decay.per_locus.tsv"
     output:
@@ -827,14 +698,8 @@ rule summarize_introner_body_decay_tail:
         """
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule introner_body_decay:
-    """
-    Target: introner-body sequence decay analysis for fixed vs polymorphic introners.
-    """
+    """Target: introner-body sequence decay analysis for fixed vs polymorphic introners."""
     input:
         INTRONER_BODY_DECAY_DIR / "introner_body_decay.per_locus.tsv",
         INTRONER_BODY_DECAY_DIR / "introner_body_decay.summary.tsv",
@@ -847,18 +712,14 @@ rule introner_body_decay:
 
 
 rule introner_body_consensus_only:
-    """
-    Target: strict introner-body consensus sequences and QC table.
-    """
+    """Target: strict introner-body consensus sequences and QC table."""
     input:
         expand(INTRONER_BODY_CONSENSUS_DIR / "{sample}.introner_body.consensus.fa", sample=ALL_SAMPLES),
         INTRONER_BODY_CONSENSUS_QC
 
 
 rule all_evolution_analysis:
-    """
-    Target: Complete evolution analysis (both all-samples and Group1)
-    """
+    """Target: Complete evolution analysis (both all-samples and Group1)"""
     input:
         # All-samples analysis outputs
         expand(DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
@@ -875,9 +736,7 @@ rule all_evolution_analysis:
 
 
 rule all_samples_evolution_only:
-    """
-    Target: All-samples fixation analysis only
-    """
+    """Target: All-samples fixation analysis only"""
     input:
         expand(DIVERSITY_DIR / "all_samples_diversity_metrics_{flank_length}bp.tsv",
                flank_length=FLANK_LENGTHS),
@@ -886,9 +745,7 @@ rule all_samples_evolution_only:
 
 
 rule group1_evolution_only:
-    """
-    Target: Group1 frequency analysis only
-    """
+    """Target: Group1 frequency analysis only"""
     input:
         expand(DIVERSITY_DIR / "group1_diversity_metrics_{flank_length}bp.tsv",
                flank_length=FLANK_LENGTHS),
@@ -899,9 +756,7 @@ rule group1_evolution_only:
 
 
 rule consensus_sequences_only:
-    """
-    Target: Build consensus sequences only (dependency for evolution analysis)
-    """
+    """Target: Build consensus sequences only (dependency for evolution analysis)"""
     input:
         expand(
             CONSENSUS_DIR / "{sample}.loci.{side}_flank_{flank_length}bp.consensus.fa",

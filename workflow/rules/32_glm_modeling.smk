@@ -1,11 +1,14 @@
-# RNA-seq and R2C2 analyses promoted from the analysis inventory.
-# Model runs and BAM scans are submitted through Snakemake by the user.
 GLM_DIR = EXPRESSION_DIR / "glm_modeling"
 FUNCTIONAL_DIR = EXPRESSION_DIR / "functional"
 EXPRESSION_SCRIPT_DIR = PROJECT_ROOT / "scripts" / "expression"
 R2C2_QUANT_DIR = Path(config["r2c2_quant_dir"])
 RAW_SQANTI = [PROJECT_ROOT / "data" / f"sqanti3_output_{label}" / f"{label}_isoforms_classification.filtered.txt" for label in ("834", "1614", "1749")]
-R2C2_QUANTS = [R2C2_QUANT_DIR / f"09092025_{label}_Isoforms.filtered.clean.quant" for label in ("834", "1614", "1749")]
+def resolve_r2c2_quant(label):
+    nested = R2C2_QUANT_DIR / f"new_{label}_remando" / "Isoforms.filtered.clean.quant"
+    flat = R2C2_QUANT_DIR / f"09092025_{label}_Isoforms.filtered.clean.quant"
+    return nested if nested.exists() or not flat.exists() else flat
+
+R2C2_QUANTS = [resolve_r2c2_quant(label) for label in ("834", "1614", "1749")]
 EXPRESSION_GTFS = expand(ANNOTATIONS_DIR / "{sample}.gtf", sample=RNA_SEQ_SAMPLES)
 EXPRESSION_COUNTS = expand(COUNTS_DIR / "{replicate}.counts.txt", replicate=get_all_replicates())
 SPLICE_BOUNDARIES = expand(INTRONER_SPLICE_DIR / "{sample}.per_locus.tsv", sample=RNA_SEQ_SAMPLES)
@@ -41,7 +44,7 @@ rule calculate_gene_gc_content:
 
 rule prepare_short_read_expression:
     input:
-        script = EXPRESSION_SCRIPT_DIR / "negative_binomial_expression_pilot/prepare_expression_pilot_data.py",
+        script = EXPRESSION_SCRIPT_DIR / "expression/prepare_short_read_expression.py",
         counts = EXPRESSION_COUNTS,
         gtfs = EXPRESSION_GTFS,
         features = ISOFORM_TURNOVER_DIR / "introner_features_by_gene_strain.tsv",
@@ -65,14 +68,14 @@ rule prepare_short_read_expression:
         python {input.script:q} --project-root {PROJECT_ROOT:q} --output-dir {params.outdir:q} > {log:q} 2>&1
         """
 
-rule prepare_r2c2_expression:
+rule prepare_expression:
     input:
-        script = EXPRESSION_SCRIPT_DIR / "r2c2_expression/prepare_r2c2_expression.py",
+        script = EXPRESSION_SCRIPT_DIR / "expression/prepare_expression.py",
         data = SHORT_READ_DATA / "expression_model_data.tsv",
         quants = R2C2_QUANTS,
         sqanti = RAW_SQANTI,
         gtfs = EXPRESSION_GTFS,
-        helpers = [EXPRESSION_SCRIPT_DIR / "negative_binomial_expression_pilot" / name for name in ("fit_expression_pilot_models.py", "prepare_expression_pilot_data.py")]
+        helpers = [EXPRESSION_SCRIPT_DIR / "expression" / name for name in ("expression_model_helpers.py", "prepare_short_read_expression.py")]
     output:
         file0 = R2C2_DATA / "r2c2/expression_model_data.tsv",
         file1 = R2C2_DATA / "r2c2/normalization_factors.tsv",
@@ -86,7 +89,7 @@ rule prepare_r2c2_expression:
         outdir = R2C2_DATA
     threads: 1
     log:
-        EXPRESSION_LOG_DIR / "prepare_r2c2_expression.log"
+        EXPRESSION_LOG_DIR / "prepare_expression.log"
     conda: "../envs/glm_modeling.yaml"
     shell:
         """
@@ -99,9 +102,9 @@ rule prepare_r2c2_expression:
 
 rule fit_within_gene_gain:
     input:
-        script = EXPRESSION_SCRIPT_DIR / "r2c2_expression/fit_within_gene_gain.py",
+        script = EXPRESSION_SCRIPT_DIR / "expression/fit_within_gene_gain.py",
         data = R2C2_DATA / "r2c2/expression_model_data.tsv",
-        helper = EXPRESSION_SCRIPT_DIR / "negative_binomial_expression_pilot/fit_expression_pilot_models.py",
+        helper = EXPRESSION_SCRIPT_DIR / "expression/expression_model_helpers.py",
         colors = PROJECT_ROOT / "scripts/figure_color_guide.py",
         guide = PROJECT_ROOT / "master_figure_color_guide.tsv"
     output:

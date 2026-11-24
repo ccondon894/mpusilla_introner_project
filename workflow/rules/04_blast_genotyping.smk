@@ -1,29 +1,8 @@
-# ============================================================
 # 04_blast_genotyping.smk - BLAST-based Introner Detection
-# ============================================================
-#
-# Identifies candidate introner loci by BLAST homology search
-# against the introner truth set.
-#
-# Steps:
-# 1. Create BLAST database for each sample genome
-# 2. BLAST introner truth set against sample genomes
-# 3. Filter hits by identity and length coverage
-# 4. Convert to BED format and filter
-# 5. Extract candidate loci sequences with flanking regions
-# 6. Filter low-complexity sequences
-# 7. Validate candidates against reference annotations
-#
-# Adapted from: /scratch1/chris/introner-genotyping-pipeline/rules/blast_genotyping_graph.smk
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Input files
 INTRONER_TRUTH_SET = PROJECT_ROOT / "resources" / "introner_truth_set.fa"
@@ -46,14 +25,9 @@ BLAST_THREADS = config["params"]["blast"]["threads"]
 SIMILARITY_CUTOFF = config["params"]["similarity"]["cutoff"]
 FLANK_LENGTH = config["params"]["flanks"]["extraction_length"]
 
-# ============================================================
-# RULES
-# ============================================================
 
 rule blast_introners:
-    """
-    BLAST introner truth set against sample genome
-    """
+    """BLAST introner truth set against sample genome"""
     input:
         db = ASSEMBLIES_DIR / "{sample}.vg_paths.fa.nhr",
         sequences = INTRONER_TRUTH_SET
@@ -74,9 +48,7 @@ rule blast_introners:
 
 
 rule filter_blast_results:
-    """
-    Filter BLAST results by identity (>=80%) and length coverage (80-120%)
-    """
+    """Filter BLAST results by identity (>=80%) and length coverage (80-120%)"""
     input:
         blast_results = BLAST_DIR / "{sample}_blast_results.txt"
     output:
@@ -93,9 +65,7 @@ rule filter_blast_results:
 
 
 rule convert_blast_to_bed:
-    """
-    Convert filtered BLAST results to BED format
-    """
+    """Convert filtered BLAST results to BED format"""
     input:
         blast = BLAST_DIR / "{sample}_filtered_blast_results.txt"
     output:
@@ -111,9 +81,7 @@ rule convert_blast_to_bed:
 
 
 rule assess_blast_results:
-    """
-    Assess and deduplicate BLAST hits
-    """
+    """Assess and deduplicate BLAST hits"""
     input:
         bed = BLAST_DIR / "{sample}_filtered_blast_results.bed"
     output:
@@ -126,9 +94,7 @@ rule assess_blast_results:
 
 
 rule add_flanks_to_bed:
-    """
-    Add flanking regions (100bp each side) to candidate loci
-    """
+    """Add flanking regions (100bp each side) to candidate loci"""
     input:
         bed = BLAST_DIR / "{sample}.candidate_loci.bed"
     output:
@@ -142,9 +108,7 @@ rule add_flanks_to_bed:
 
 
 rule extract_candidate_sequences:
-    """
-    Extract FASTA sequences for candidate loci with flanks
-    """
+    """Extract FASTA sequences for candidate loci with flanks"""
     input:
         bed = BLAST_DIR / "{sample}.candidate_loci_plus_flanks.bed",
         fa = ASSEMBLIES_DIR / "{sample}.vg_paths.fa"
@@ -159,9 +123,7 @@ rule extract_candidate_sequences:
 
 
 rule filter_low_complexity:
-    """
-    Remove low-complexity sequences from candidates
-    """
+    """Remove low-complexity sequences from candidates"""
     input:
         fa = BLAST_DIR / "{sample}.candidate_loci_plus_flanks.fa"
     output:
@@ -180,13 +142,7 @@ rule filter_low_complexity:
 
 
 rule validate_introner_candidates:
-    """
-    Validate introner candidates using BLAST-based family classification.
-
-    Scores each candidate against all individual reference introner sequences
-    (not a single consensus per family), providing more reliable family
-    assignments and explicit confidence margins.
-    """
+    """Validate introner candidates using BLAST-based family classification."""
     input:
         fa = BLAST_DIR / "{sample}.candidate_loci_plus_flanks.filtered.fa",
         gtf = ANNOTATIONS_DIR / "{sample}.gtf"
@@ -211,22 +167,7 @@ rule validate_introner_candidates:
 
 
 rule filter_boundary_spanning_introners:
-    """
-    Filter introner candidates by gene-boundary overlap.
-
-    Rejects candidates whose body spans multiple genes or extends past a
-    single gene's transcript boundary (with a small tolerance for extraction
-    noise). A biologically valid introner should be either fully inside a
-    gene (intronic/exonic/UTR) or fully in an intergenic region.
-
-    Candidates that straddle gene boundaries are most likely false positive
-    BLAST hits where a sequence with moderate similarity to an introner
-    reference happens to align across a gene boundary.
-
-    Each kept candidate gets a 'genomic_context' tag (intra_gene or
-    intergenic) added to its FASTA header. Rejected candidates are logged
-    to a separate file for auditing.
-    """
+    """Filter introner candidates by gene-boundary overlap."""
     input:
         fa = BLAST_DIR / "{sample}.candidate_loci.validated.fa",
         gtf = ANNOTATIONS_DIR / "{sample}.gtf"
@@ -249,12 +190,7 @@ rule filter_boundary_spanning_introners:
 
 
 rule create_candidate_bed:
-    """
-    Create BED file from the boundary-filtered candidate FASTA.
-
-    Includes a genomic_context column indicating whether the candidate is
-    inside a gene (intra_gene) or in an intergenic region (intergenic).
-    """
+    """Create BED file from the boundary-filtered candidate FASTA."""
     input:
         fa = BLAST_DIR / "{sample}.candidate_loci.filtered.fa"
     output:
@@ -300,9 +236,7 @@ rule create_candidate_bed:
 
 
 rule all_blast_genotyping:
-    """
-    Target: Generate all BLAST candidate loci
-    """
+    """Target: Generate all BLAST candidate loci"""
     input:
         expand(BLAST_DIR / "{sample}.candidate_loci.filtered.fa", sample=ALL_SAMPLES),
         expand(BLAST_DIR / "{sample}.candidate_loci.filtered.bed", sample=ALL_SAMPLES)

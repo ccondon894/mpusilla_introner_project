@@ -1,24 +1,6 @@
-# ============================================================
-# 31_isoform_analysis.smk - Isoform Diversity Analysis
-# ============================================================
-#
-# Analyzes isoform diversity and NMD (nonsense-mediated decay):
-# 1. Shannon diversity analysis of isoform expression
-# 2. NMD prediction analysis correlated with introner status
-# 3. Isoform abundance characterization
-#
-# Adapted from:
-# - /scratch1/chris/introner-expression-analysis/scripts/shannon_diversity_analysis_consolidated.py
-# - /scratch1/chris/introner-expression-analysis/scripts/analyze_nmd_predictions.py
-#
-# ============================================================
-
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 EXPRESSION_DIR = RESULTS / "expression"
@@ -56,21 +38,8 @@ MT_END = config["mating_type_region"]["end"]
 TURNOVER_MT_CONTIG = config["mating_type_region"]["group1"]["contig"]
 
 
-# ============================================================
-# SHANNON DIVERSITY ANALYSIS
-# ============================================================
-
 rule calculate_shannon_diversity:
-    """
-    Calculate Shannon diversity index for isoform expression.
-
-    For each gene, calculates:
-    - Shannon Index (H): H = -sum(p_i * ln(p_i))
-    - Shannon Evenness (J'): J' = H / ln(k)
-
-    Higher values indicate more even isoform expression.
-    Filters out mating-type region genes.
-    """
+    """Calculate Shannon diversity index for isoform expression."""
     input:
         sqanti_data = SQANTI_DIR / "parsed_sqanti3_data.tsv",
         gtf = ANNOTATIONS_DIR / "CCMP1545.gtf"
@@ -104,11 +73,7 @@ rule calculate_shannon_diversity:
 
 
 rule diversity_by_introner_status:
-    """
-    Compare Shannon diversity between genes with/without introners.
-
-    Tests whether introner presence correlates with isoform diversity.
-    """
+    """Compare Shannon diversity between genes with/without introners."""
     input:
         diversity = DIVERSITY_DIR / "shannon_diversity_per_gene.csv",
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
@@ -133,14 +98,10 @@ rule diversity_by_introner_status:
         """
 
 
-# ============================================================
-# INTRONER LOCI BED FILE
-# ============================================================
+# Introner loci bed file
 
 rule create_introner_loci_bed:
-    """
-    Extract CCMP1545 introner loci from genotype matrix into BED format.
-    """
+    """Extract CCMP1545 introner loci from genotype matrix into BED format."""
     input:
         matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
@@ -157,12 +118,7 @@ rule create_introner_loci_bed:
 
 
 rule create_strain_introner_loci_bed:
-    """
-    Extract strain-specific introner loci from the genotype matrix.
-
-    These BEDs are used for per-strain NMD analysis so each SQANTI3
-    transcript set is compared against introners in its own genome frame.
-    """
+    """Extract strain-specific introner loci from the genotype matrix."""
     input:
         matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv"
     output:
@@ -179,21 +135,10 @@ rule create_strain_introner_loci_bed:
         bed.to_csv(output.bed, sep='\t', header=False, index=False)
 
 
-# ============================================================
-# NMD (NONSENSE-MEDIATED DECAY) ANALYSIS
-# ============================================================
+# Nmd (nonsense-mediated decay) analysis
 
 rule analyze_nmd_predictions:
-    """
-    Analyze NMD predictions from SQANTI3 classification.
-
-    Correlates NMD status with introner presence using the original
-    per-strain analysis structure: each strain's SQANTI3 file is analyzed
-    against its own GTF and strain-specific introner BED, with mating-type
-    region genes filtered before multi-exon filtering.
-
-    Uses Fisher's exact test for statistical significance.
-    """
+    """Analyze NMD predictions from SQANTI3 classification."""
     input:
         sqanti_ccmp1545 = PROJECT_ROOT / "data" / "sqanti3_output_834" / "834_isoforms_classification.filtered.txt",
         sqanti_rcc1614 = PROJECT_ROOT / "data" / "sqanti3_output_1614" / "1614_isoforms_classification.filtered.txt",
@@ -241,12 +186,7 @@ rule analyze_nmd_predictions:
 
 
 rule nmd_by_strain:
-    """
-    Analyze NMD predictions stratified by strain.
-
-    Compares NMD patterns across CCMP1545, RCC1614, and RCC1749 using
-    strain-specific SQANTI3 files, GTFs, and introner BEDs.
-    """
+    """Analyze NMD predictions stratified by strain."""
     input:
         sqanti_ccmp1545 = PROJECT_ROOT / "data" / "sqanti3_output_834" / "834_isoforms_classification.filtered.txt",
         sqanti_rcc1614 = PROJECT_ROOT / "data" / "sqanti3_output_1614" / "1614_isoforms_classification.filtered.txt",
@@ -285,18 +225,10 @@ rule nmd_by_strain:
         """
 
 
-# ============================================================
-# LOCUS-AWARE ISOFORM TURNOVER DATA
-# ============================================================
+# Locus-aware isoform turnover data
 
 rule prepare_isoform_turnover_data:
-    """
-    Prepare the common-gene, locus-wise table used by isoform turnover models.
-
-    SQANTI assignments are audited against sample-specific GTFs. Genotype loci
-    are mapped to gene spans in each sample, missing calls remain missing, and
-    callable CCMP1545-relative gains and losses are counted independently.
-    """
+    """Prepare the common-gene, locus-wise table used by isoform turnover models."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         ccmp1545_gtf = ANNOTATIONS_DIR / "CCMP1545.gtf",
@@ -339,9 +271,7 @@ rule prepare_isoform_turnover_data:
 
 
 rule plot_introner_isoform_tracks:
-    """
-    Render representative sample-aligned gene model and R2C2 isoform tracks.
-    """
+    """Render representative sample-aligned gene model and R2C2 isoform tracks."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.final.tsv",
         introner_intron_table = RESULTS / "expression" / "functional" / "isoform_candidates" / "current_genotype_introner_vs_annotated_intron_size.tsv",
@@ -374,22 +304,14 @@ rule plot_introner_isoform_tracks:
 
 
 rule isoform_track_figures:
-    """
-    Target: Representative introner gene/transcript-structure track figures.
-    """
+    """Target: Representative introner gene/transcript-structure track figures."""
     input:
         ISOFORM_TRACK_PDFS,
         ISOFORM_TRACK_PNGS
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule isoform_analysis_complete:
-    """
-    Target: Complete isoform diversity and NMD analysis.
-    """
+    """Target: Complete isoform diversity and NMD analysis."""
     input:
         DIVERSITY_DIR / "shannon_diversity_per_gene.csv",
         DIVERSITY_DIR / "diversity_by_introner_status.csv",
@@ -403,18 +325,14 @@ rule isoform_analysis_complete:
 
 
 rule shannon_diversity_only:
-    """
-    Target: Shannon diversity analysis only.
-    """
+    """Target: Shannon diversity analysis only."""
     input:
         DIVERSITY_DIR / "shannon_diversity_per_gene.csv",
         FIGURES_DIR / "shannon_diversity_distribution.pdf"
 
 
 rule nmd_analysis_only:
-    """
-    Target: NMD analysis only.
-    """
+    """Target: NMD analysis only."""
     input:
         NMD_DIR / "nmd_introner_analysis.txt",
         FIGURES_DIR / "nmd_introner_association.pdf"

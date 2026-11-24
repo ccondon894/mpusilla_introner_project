@@ -1,10 +1,4 @@
-# ============================================================================
 # 12_genome_alignment_circos.smk
-# Whole-genome MUMmer alignment and Circos synteny visualization
-# Compares CCMP1545 (intronerful) vs RCC1749 (intronerless) assemblies
-#
-# Source: /scratch1/chris/introner-group-comparison-analysis/rules/mummer_circos.smk
-# ============================================================================
 
 import os
 
@@ -24,9 +18,7 @@ GA_SCRIPTS = str(Path(workflow.basedir).parent / "scripts" / "genome_alignment")
 MUMMER_PARAMS = config.get("params", {}).get("mummer", {})
 CIRCOS_PARAMS = config.get("params", {}).get("circos", {})
 
-# ============================================================================
-# MUMMER ALIGNMENT RULES
-# ============================================================================
+# Mummer alignment rules
 
 rule nucmer_alignment:
     """Run nucmer whole-genome alignment and filter for 1-to-1 mappings."""
@@ -60,9 +52,7 @@ rule mummerplot_dotplot:
         mummerplot --png -p {params.prefix} --large {input.delta}
         """
 
-# ============================================================================
-# CIRCOS PREPARATION RULES
-# ============================================================================
+# Circos preparation rules
 
 rule generate_karyotype:
     """Generate circos karyotype file from assembly indices."""
@@ -217,9 +207,7 @@ rule generate_ribbons:
             --output {output.ribbons}
         """
 
-# ============================================================================
-# CIRCOS HISTOGRAM RULES
-# ============================================================================
+# Circos histogram rules
 
 # Non-introner intron matrix is produced by rules/13_non_introner_introns.smk.
 NON_INTRONER_INTRONS_DIR_FOR_CIRCOS = EVOLUTION_DIR / "non_introner_introns"
@@ -256,9 +244,7 @@ rule generate_circos_histograms:
             --output-dir {params.output_dir}
         """
 
-# ============================================================================
-# CIRCOS RENDERING RULES
-# ============================================================================
+# Circos rendering rules
 
 # Static circos config lives in data/circos/.
 CIRCOS_DATA_DIR = PROJECT_ROOT / "data" / "circos"

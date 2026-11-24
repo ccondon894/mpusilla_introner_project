@@ -1,25 +1,8 @@
-# ============================================================
 # 22_phylogenetics.smk - Phylogenetic Analysis with IQ-TREE
-# ============================================================
-#
-# Constructs phylogenetic trees from 4-fold degenerate SNPs.
-#
-# Pipeline:
-# 1. Convert VCF to PHYLIP format
-# 2. Run IQ-TREE maximum likelihood analysis
-# 3. Generate publication-quality tree plots
-#
-# Adapted from:
-# - /scratch1/chris/introner_vis/iqtree/commands.sh
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Output directories
 SNP_DIR = RESULTS / "snp_popgen"
@@ -32,18 +15,10 @@ IQTREE_MODEL = config["params"]["iqtree"]["model"]
 IQTREE_BOOTSTRAP = config["params"]["iqtree"]["bootstrap"]
 
 
-# ============================================================
-# VCF TO PHYLIP CONVERSION
-# ============================================================
+# Vcf to phylip conversion
 
 rule vcf_to_phylip:
-    """
-    Convert VCF to PHYLIP format for phylogenetic analysis.
-
-    Uses vcf2phylip.py to create alignment from SNP data.
-    The script handles IUPAC ambiguity codes for heterozygous sites
-    (though M. pusilla is haploid).
-    """
+    """Convert VCF to PHYLIP format for phylogenetic analysis."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"
     output:
@@ -72,11 +47,7 @@ rule vcf_to_phylip:
 
 
 rule vcf_to_phylip_nomissing:
-    """
-    Convert no-missing-data VCF to PHYLIP format.
-
-    Uses stricter filtering for sites with complete data.
-    """
+    """Convert no-missing-data VCF to PHYLIP format."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.nomissing.vcf.gz"
     output:
@@ -101,17 +72,10 @@ rule vcf_to_phylip_nomissing:
         """
 
 
-# ============================================================
-# IQ-TREE MAXIMUM LIKELIHOOD ANALYSIS
-# ============================================================
+# Iq-tree maximum likelihood analysis
 
 rule run_iqtree:
-    """
-    Run IQ-TREE maximum likelihood phylogenetic analysis.
-
-    Uses GTR+ASC model (with ascertainment bias correction for SNP data)
-    and ultrafast bootstrap for branch support.
-    """
+    """Run IQ-TREE maximum likelihood phylogenetic analysis."""
     input:
         phylip = PHYLO_DIR / "mpusilla.snps.4d.min4.phy"
     output:
@@ -140,9 +104,7 @@ rule run_iqtree:
 
 
 rule run_iqtree_nomissing:
-    """
-    Run IQ-TREE on complete-data alignment.
-    """
+    """Run IQ-TREE on complete-data alignment."""
     input:
         phylip = PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.phy"
     output:
@@ -169,20 +131,10 @@ rule run_iqtree_nomissing:
         """
 
 
-# ============================================================
-# TREE VISUALIZATION
-# ============================================================
+# Tree visualization
 
 rule plot_phylogenetic_tree:
-    """
-    Generate publication-quality phylogenetic tree plot.
-
-    Colors samples by group:
-    - Group1 (intronerful): Blue
-    - Group2 (intronerless): Red
-
-    Includes a scale bar; bootstrap support values are omitted from the figure.
-    """
+    """Generate publication-quality phylogenetic tree plot."""
     input:
         treefile = PHYLO_DIR / "mpusilla.snps.4d.rooted.treefile"
     output:
@@ -207,11 +159,7 @@ rule plot_phylogenetic_tree:
 
 
 rule reroot_tree:
-    """
-    Reroot tree using Group2 as outgroup.
-
-    Creates a rooted tree for evolutionary interpretation.
-    """
+    """Reroot tree using Group2 as outgroup."""
     input:
         treefile = PHYLO_DIR / "mpusilla.snps.4d.min4.phy.treefile"
     output:
@@ -241,14 +189,8 @@ except ImportError:
         """
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule phylogenetics_complete:
-    """
-    Target: Complete phylogenetic analysis.
-    """
+    """Target: Complete phylogenetic analysis."""
     input:
         PHYLO_DIR / "mpusilla.snps.4d.min4.phy.treefile",
         PHYLO_DIR / "mpusilla.snps.4d.nomissing.min4.phy.treefile",
@@ -257,17 +199,13 @@ rule phylogenetics_complete:
 
 
 rule iqtree_only:
-    """
-    Target: Run IQ-TREE analysis only.
-    """
+    """Target: Run IQ-TREE analysis only."""
     input:
         PHYLO_DIR / "mpusilla.snps.4d.min4.phy.treefile"
 
 
 rule tree_plots_only:
-    """
-    Target: Generate tree plots only.
-    """
+    """Target: Generate tree plots only."""
     input:
         FIGURES_DIR / "snp_popgen" / "phylogenetic_tree.pdf",
         FIGURES_DIR / "snp_popgen"  / "snp_popgen"  / "phylogenetic_tree.png"

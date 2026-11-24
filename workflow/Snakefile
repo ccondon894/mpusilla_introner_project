@@ -1,18 +1,8 @@
-# ============================================================
 # Micromonas pusilla Introner Project - Master Workflow
-# ============================================================
-#
-# This is the main entry point for the analysis pipeline.
-# Run with: snakemake --configfile config/config.yaml --cores N
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Ensure config is loaded
 if not config:
@@ -57,11 +47,6 @@ def get_gtf(sample):
     return ANNOTATIONS_DIR / f"{sample}.gtf"
 
 
-# ============================================================
-# WILDCARD CONSTRAINTS
-# ============================================================
-# Constrain wildcards to prevent unbounded matching and DAG explosion
-
 # Build regex pattern from sample names
 SAMPLE_PATTERN = "|".join(ALL_SAMPLES)
 
@@ -72,26 +57,6 @@ wildcard_constraints:
     ref = "CCMP1545_v3|RCC1749_assembly",
     flank_length = r"\d+"
 
-# ============================================================
-# MODULE SELECTION
-# ============================================================
-#
-# By default, all modules are loaded. To speed up DAG building,
-# specify which modules to load via --config modules=X
-#
-# Available modules:
-#   genotyping  - Core genotyping pipeline (rules 00-06)
-#   evolution   - Evolution analysis (rules 10-12)
-#   snp         - SNP population genetics (rules 20-24)
-#   expression  - Expression & GO analysis (rules 30-32, 40)
-#   all         - Load all modules (default)
-#
-# Examples:
-#   snakemake --configfile config/config.yaml --cores 8 genotype_matrix --config modules=genotyping
-#   snakemake --configfile config/config.yaml --cores 8 evolution_all --config modules=genotyping,evolution
-#   snakemake --configfile config/config.yaml --cores 8 full_pipeline --config modules=all
-#
-# ============================================================
 
 # Parse module selection from config
 MODULES = config.get("modules", "all")
@@ -114,9 +79,6 @@ LOAD_EVOLUTION = LOAD_ALL or "evolution" in MODULES
 LOAD_SNP = LOAD_ALL or "snp" in MODULES
 LOAD_EXPRESSION = LOAD_ALL or "expression" in MODULES
 
-# ============================================================
-# INCLUDE RULE FILES (conditional based on module selection)
-# ============================================================
 
 # Core genotyping pipeline (always needed as foundation)
 if LOAD_GENOTYPING or LOAD_EVOLUTION or LOAD_SNP or LOAD_EXPRESSION:
@@ -137,7 +99,6 @@ if LOAD_EVOLUTION:
     include: "rules/16_sfs_inference.smk"
     include: "rules/17_canonical_intron_dxy.smk"
     include: "rules/18_cds_position.smk"
-    include: "rules/27_mating_type_audit.smk"
 
 # SNP population genetics (Iteration 3)
 if LOAD_SNP:
@@ -155,24 +116,14 @@ if LOAD_EXPRESSION:
     include: "rules/31_isoform_analysis.smk"
     include: "rules/32_glm_modeling.smk"
     include: "rules/33_functional_expression.smk"
-    include: "rules/34_expression_sensitivities.smk"
     include: "rules/35_expression_figures.smk"
     include: "rules/36_expression_comparisons.smk"
     # GO enrichment (Iteration 4)
     include: "rules/40_go_enrichment.smk"
 
-# ============================================================
-# TARGET RULES
-# ============================================================
 
 rule all:
-    """
-    Default target: Generate final genotype matrix
-
-    The core genotyping pipeline produces:
-    - genotype_matrix.tsv: Annotated matrix from ortholog detection
-    - genotype_matrix.final.tsv: Coverage-validated matrix
-    """
+    """Default target: Generate final genotype matrix"""
     input:
         # Core genotyping pipeline outputs (coverage-validated)
         GENOTYPING_DIR / "genotype_matrix.final.tsv",
@@ -181,50 +132,35 @@ rule all:
 
 
 rule genotype_matrix:
-    """
-    Target: Generate genotype matrix (without coverage validation)
-    """
+    """Target: Generate genotype matrix (without coverage validation)"""
     input:
         GENOTYPING_DIR / "genotype_matrix.tsv"
 
 
 rule genotype_matrix_validated:
-    """
-    Target: Generate coverage-validated genotype matrix
-    """
+    """Target: Generate coverage-validated genotype matrix"""
     input:
         GENOTYPING_DIR / "genotype_matrix.final.tsv"
 
 
 rule gtf_annotations:
-    """
-    Target: Generate all GTF annotations only
-    """
+    """Target: Generate all GTF annotations only"""
     input:
         expand(ANNOTATIONS_DIR / "{sample}.gtf", sample=ALL_SAMPLES)
 
 
 rule blast_candidates:
-    """
-    Target: Generate BLAST candidate loci only
-    """
+    """Target: Generate BLAST candidate loci only"""
     input:
         expand(GENOTYPING_DIR / "blast_results" / "{sample}.candidate_loci.filtered.fa",
                sample=ALL_SAMPLES)
 
 
-# ============================================================
 # EVOLUTION ANALYSIS TARGETS (Iteration 2)
-# ============================================================
 
 if LOAD_EVOLUTION:
     rule file_setup:
-        """
-        Target: Pre-generate classification JSON files for evolution analysis.
-
-        Running this first allows subsequent runs to skip checkpoint evaluation,
-        significantly speeding up DAG building.
-        """
+        """Target: Pre-generate classification JSON files for evolution analysis."""
         input:
             rules.classify_all_samples_orthologs.output.classification_100bp,
             rules.classify_all_samples_orthologs.output.classification_200bp,
@@ -232,16 +168,7 @@ if LOAD_EVOLUTION:
             rules.classify_group1_orthologs.output.classification_200bp
 
     rule evolution_all:
-        """
-        Target: Complete evolution analysis pipeline (Iteration 2)
-
-        Includes:
-        - Consensus sequence building for flanking regions
-        - All-samples fixation category analysis (Fixed Group1, Fixed Group2, etc.)
-        - Group1 frequency-based analysis (present in 1-11 samples)
-        - Current gain/loss inference is provided by rule 16 SFS targets;
-          the deprecated PHDR/AHDR workflow was removed in May 2026
-        """
+        """Target: Complete evolution analysis pipeline (Iteration 2)"""
         input:
             # Evolution diversity metrics (100bp and 200bp flanks)
             expand(EVOLUTION_DIR / "diversity_metrics" / "all_samples_diversity_metrics_{flank_length}bp.tsv",
@@ -258,12 +185,7 @@ if LOAD_EVOLUTION:
 
 
     rule genome_alignment_circos:
-        """
-        Target: Whole-genome MUMmer alignment + Circos plot (CCMP1545 vs RCC1749)
-
-        Produces synteny dot plot and circos visualization comparing
-        the intronerful and intronerless reference genomes.
-        """
+        """Target: Whole-genome MUMmer alignment + Circos plot (CCMP1545 vs RCC1749)"""
         input:
             GENOME_ALIGNMENT_DIR / "mummer" / f"{REFERENCE}_vs_{config['samples']['reference']['group2']}.1delta",
             FIGURES_DIR / "genome_alignment" / f"{REFERENCE}_vs_{config['samples']['reference']['group2']}.png",
@@ -274,16 +196,7 @@ if LOAD_EVOLUTION:
 
 
     rule genotyping_evolution_all:
-        """
-        Target: Complete genotyping + evolution pipeline (Iterations 1 + 2)
-
-        Runs the full core pipeline:
-        - GTF liftover annotations for all samples
-        - BLAST-based introner candidate detection
-        - Ortholog detection and genotype matrix construction
-        - Evolution analysis (all-samples + Group1 frequency)
-        - Group 1 frequency analysis (gain/loss inference is in rule 16)
-        """
+        """Target: Complete genotyping + evolution pipeline (Iterations 1 + 2)"""
         input:
             # Iteration 1: Genotyping outputs
             GENOTYPING_DIR / "genotype_matrix.tsv",
@@ -295,22 +208,11 @@ if LOAD_EVOLUTION:
                    flank_length=[100, 200])
 
 
-# ============================================================
 # SNP POPULATION GENETICS TARGETS (Iteration 3)
-# ============================================================
 
 if LOAD_SNP:
     rule snp_popgen_all:
-        """
-        Target: Complete SNP population genetics pipeline (Iteration 3)
-
-        Includes:
-        - SNP calling with GATK
-        - VCF filtering and 4-fold degenerate site extraction
-        - Phylogenetic analysis with IQ-TREE
-        - Demographic modeling with moments
-        - Selection and population structure analysis
-        """
+        """Target: Complete SNP population genetics pipeline (Iteration 3)"""
         input:
             # SNP calling outputs
             SNP_DIR / "vcf" / "mpusilla.joint.vcf.gz",
@@ -331,23 +233,11 @@ if LOAD_SNP:
             FIGURES_DIR / "ld_decay.pdf"
 
 
-# ============================================================
 # EXPRESSION & GO ANALYSIS TARGETS (Iteration 4)
-# ============================================================
 
 if LOAD_EXPRESSION:
     rule expression_go_all:
-        """
-        Target: Complete expression and GO analysis pipeline (Iteration 4)
-
-        Includes:
-        - RNA-seq quantification with featureCounts
-        - SQANTI3 isoform classification
-        - Shannon diversity analysis
-        - NMD analysis
-        - GLM statistical modeling
-        - GO enrichment analysis
-        """
+        """Target: Complete expression and GO analysis pipeline (Iteration 4)"""
         input:
             # Expression quantification
             EXPRESSION_DIR / "counts" / "merged_counts_matrix.csv",
@@ -366,21 +256,11 @@ if LOAD_EXPRESSION:
             FIGURES_DIR / "go_enrichment_top_terms.pdf"
 
 
-# ============================================================
 # FULL PIPELINE TARGET (requires all modules)
-# ============================================================
 
 if LOAD_ALL:
     rule full_pipeline:
-        """
-        Target: Run complete pipeline (all iterations)
-
-        Runs all analysis components in order:
-        1. Core genotyping (genotype matrix)
-        2. Evolution analysis
-        3. SNP population genetics
-        4. Expression & GO analysis
-        """
+        """Target: Run complete pipeline (all iterations)"""
         input:
             lambda wildcards: rules.additional_analyses_complete.input,
             # Iteration 1-2: Genotyping & Evolution
@@ -398,14 +278,8 @@ if LOAD_ALL:
             FIGURES_DIR / "go_enrichment_top_terms.pdf"
 
 
-# ============================================================
-# UTILITY RULES
-# ============================================================
-
 rule clean:
-    """
-    Clean all generated files (use with caution!)
-    """
+    """Clean all generated files (use with caution!)"""
     shell:
         """
         echo "This would remove all results. Run manually if sure."
@@ -414,9 +288,7 @@ rule clean:
 
 
 rule dag:
-    """
-    Generate DAG visualization
-    """
+    """Generate DAG visualization"""
     output:
         "dag.png"
     shell:
@@ -424,10 +296,6 @@ rule dag:
         snakemake --dag | dot -Tpng > {output}
         """
 
-
-# ============================================================
-# WORKFLOW INFORMATION
-# ============================================================
 
 onstart:
     print("=" * 60)

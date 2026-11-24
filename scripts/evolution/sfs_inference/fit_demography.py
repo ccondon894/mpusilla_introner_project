@@ -36,7 +36,7 @@ def parse_args():
     return p.parse_args()
 
 
-# ---- Model definitions -----------------------------------------------------
+# Model definitions
 
 # Each entry: (name, function(params, ns), p0, lower, upper)
 # Constant-size has no free demographic params (just theta).
@@ -313,7 +313,7 @@ def main():
     with open(args.best, "wb") as fh:
         pickle.dump(best, fh)
 
-    # ---- Per-bin residuals for the best model ----------------------------
+    # Per-bin residuals for the best model
     half = n // 2
     best_spec = MODELS[best_name]
     best_arr, best_mask = _build_model_array(best_spec, fits[best_name]["params"], n)
@@ -328,7 +328,7 @@ def main():
             z = r / np.sqrt(e) if e > 0 else float("nan")
             fh.write(f"{best_name}\t{i}\t{o:.6f}\t{e:.6f}\t{r:.6f}\t{z:.6f}\n")
 
-    # ---- Two-panel diagnostic plot ---------------------------------------
+    # Two-panel diagnostic plot
     bins = np.arange(1, half + 1)
     obs_seg = obs_folded[1 : half + 1]
     colors = {

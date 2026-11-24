@@ -1,4 +1,3 @@
-
 import os
 from pathlib import Path
 
@@ -40,12 +39,7 @@ FLANK_LENGTH = config["params"]["flanks"]["extraction_length"]
 SIMILARITY_CUTOFF = config["params"]["similarity"]["cutoff"]
 
 rule gtf_to_gene_bed:
-    """
-    Convert GTF gene annotations to simplified BED format for bedtools.
-
-    Extracts gene-level features from GTF and outputs 6-column BED format:
-    chrom, start (0-based), end (1-based), name (gene_id), score (.), strand
-    """
+    """Convert GTF gene annotations to simplified BED format for bedtools."""
     input:
         gtf = ANNOTATIONS_DIR / "{sample}.gtf"
     output:
@@ -71,16 +65,7 @@ rule gtf_to_gene_bed:
 
 
 rule compute_insertion_fingerprints:
-    """
-    Compute codon-level insertion fingerprints for introner loci.
-
-    For each introner with a gene and splice site annotation, maps the
-    insertion site to a (gene_id, codon_number, codon_offset) fingerprint
-    using the splice site position and GTF CDS exon structure.
-
-    Used downstream by resolve_ortholog_groups to distinguish ancestral
-    shared introners from independent insertions at the same locus.
-    """
+    """Compute codon-level insertion fingerprints for introner loci."""
     input:
         bed = BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
         gtf = ANNOTATIONS_DIR / "{sample}.gtf",
@@ -101,18 +86,7 @@ rule compute_insertion_fingerprints:
 
 
 rule detect_tandem_duplicates:
-    """
-    Detect tandem duplications within each sample's introner candidate loci.
-
-    For each pair of introners in the same sample within a configurable
-    genomic window, checks if their body sequences have very high identity.
-    Groups them into tandem clusters via union-find.
-
-    Tandem clusters arise from gene duplications and produce introners
-    that the flank-based ortholog detection cannot distinguish (because
-    their flanking regions are also duplicated). The output is used to
-    flag affected ortholog groups in the splitting step.
-    """
+    """Detect tandem duplications within each sample's introner candidate loci."""
     input:
         bed = BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
         genome = ASSEMBLIES_DIR / "{sample}.vg_paths.fa",
@@ -136,17 +110,7 @@ rule detect_tandem_duplicates:
 
 # PHASE 1A: Synteny-Based Context Mapping
 rule annotate_introner_context:
-    """
-    Create introner synteny map with three-part genomic fingerprint.
-
-    For each introner locus, identify:
-    1. Host gene (containing gene via bedtools intersect)
-    2. Upstream gene neighbor (bedtools closest -io -id)
-    3. Downstream gene neighbor (bedtools closest -io -iu)
-
-    The synteny fingerprint (Upstream <-- Host --> Downstream) enables
-    ortholog detection across samples with different introner content.
-    """
+    """Create introner synteny map with three-part genomic fingerprint."""
     input:
         introner_bed = BLAST_DIR / "{sample}.candidate_loci.filtered.bed",
         gene_bed = PROCESSED_ANN_DIR / "{sample}.gene.bed"
@@ -200,15 +164,9 @@ rule annotate_introner_context:
         """
 
 
-
 # PHASE 1B: Flanking Region Extraction and Indexing
 rule extract_flanks:
-    """
-    Extract left and right flanking sequences from candidate loci.
-
-    Splits the candidate loci FASTA (which contains introner + flanks)
-    into separate left flank and right flank FASTA files for alignment.
-    """
+    """Extract left and right flanking sequences from candidate loci."""
     input:
         fa = BLAST_DIR / "{sample}.candidate_loci.filtered.fa"
     output:
@@ -222,13 +180,7 @@ rule extract_flanks:
 
 
 rule bwa_align_flanks:
-    """
-    Align flanking sequences from query sample to target genome.
-
-    This is the core ortholog detection step: if left and right flanks
-    from a query introner align close together in the target genome,
-    the locus is likely orthologous.
-    """
+    """Align flanking sequences from query sample to target genome."""
     input:
         query_left = ORTHOLOG_DIR / "{query}.left_flanks.fa",
         query_right = ORTHOLOG_DIR / "{query}.right_flanks.fa",
@@ -255,18 +207,7 @@ rule bwa_align_flanks:
 
 # PHASE 1C: Initial Ortholog Pairing
 rule pair_orthologs_initial:
-    """
-    PHASE 1 INITIAL PASS: Pair orthologs from Phase 1 BAM alignments.
-
-    Uses left/right flank alignment positions to identify orthologous
-    introner loci across samples. Produces initial results that identify
-    scenario 3 (missing data) loci for Phase 2 rescue.
-
-    Scenarios:
-    1. Both flanks align together → introner present
-    2. Only flanks align (no introner) → introner absent
-    3. No/poor alignment → missing data (requires rescue)
-    """
+    """PHASE 1 INITIAL PASS: Pair orthologs from Phase 1 BAM alignments."""
     input:
         left_bam = [ORTHOLOG_DIR / f"{query}_{target}.left_flank.sorted.bam"
                     for query in ALL_SAMPLES
@@ -293,18 +234,10 @@ rule pair_orthologs_initial:
         """
 
 
-# ============================================================
 # PHASE 2: Rescue Alignments for Distant Pairs
-# ============================================================
 
 rule extract_scenario3_flanks:
-    """
-    Extract flank sequences for scenario 3 loci needing rescue.
-
-    Identifies all scenario 3 (missing data) cases from initial
-    ortholog detection and extracts corresponding flank sequences
-    for Group1↔Group2 rescue alignments with relaxed parameters.
-    """
+    """Extract flank sequences for scenario 3 loci needing rescue."""
     input:
         ortholog_results = GENOTYPING_DIR / "ortholog_results.initial.tsv",
         left_flanks = [ORTHOLOG_DIR / f"{sample}.left_flanks.fa" for sample in ALL_SAMPLES],
@@ -324,15 +257,7 @@ rule extract_scenario3_flanks:
 
 
 rule align_rescue_flanks:
-    """
-    Align scenario 3 flanks with relaxed BWA parameters.
-
-    Uses relaxed parameters for divergent Group1↔Group2 sequences:
-    -k: shorter seed length
-    -W: shorter minimum seed length
-    -r: less stringent re-seeding
-    -A/-B: relaxed scoring (lower mismatch penalty)
-    """
+    """Align scenario 3 flanks with relaxed BWA parameters."""
     input:
         rescue_flanks = RESCUE_DIR / "{query}_to_{target}.scenario3_flanks.fa",
         target_genome = ASSEMBLIES_DIR / "{target}.vg_paths.fa",
@@ -360,18 +285,10 @@ rule align_rescue_flanks:
         """
 
 
-# ============================================================
 # PHASE 1 RESCUE PASS: Incorporate Rescue Data
-# ============================================================
 
 rule pair_orthologs_rescue:
-    """
-    PHASE 1 RESCUE PASS: Pair orthologs with Phase 2 rescue data.
-
-    Re-runs ortholog pairing using BOTH Phase 1 BAM files AND
-    Phase 2 rescue BAMs. Fills in scenario 3 loci with rescue data
-    to create the final ortholog results.
-    """
+    """PHASE 1 RESCUE PASS: Pair orthologs with Phase 2 rescue data."""
     input:
         left_bam = [ORTHOLOG_DIR / f"{query}_{target}.left_flank.sorted.bam"
                     for query in ALL_SAMPLES
@@ -402,13 +319,7 @@ rule pair_orthologs_rescue:
 
 # FINAL: Build and Annotate Genotype Matrix
 rule build_genotype_matrix:
-    """
-    Build genotype matrix from ortholog detection results.
-
-    Creates a matrix of introner presence/absence across all samples
-    using the network-based approach to group orthologous loci.
-    Also emits locus_group_members.tsv as provenance-only sidecar metadata.
-    """
+    """Build genotype matrix from ortholog detection results."""
     input:
         orthologs = GENOTYPING_DIR / "ortholog_results.tsv"
     output:
@@ -422,12 +333,7 @@ rule build_genotype_matrix:
 
 
 rule fix_orientations:
-    """
-    Fix introner orientations in the genotype matrix.
-
-    Ensures consistent orientation (relative to gene direction)
-    across all samples for each ortholog group.
-    """
+    """Fix introner orientations in the genotype matrix."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.raw.tsv"
     output:
@@ -444,15 +350,7 @@ rule fix_orientations:
 
 
 rule resolve_ortholog_groups:
-    """
-    Consolidated ortholog resolver.
-
-    Replaces the former classify/split/reclassify/cross-split/reclassify/
-    sequence-comparison chain. Iterates classification and splitting until
-    stable, then refines statuses with body-sequence identity. Mixed CDS/intron
-    fingerprints use evidence-guarded matching: explicit conflicting amino-acid
-    contexts cannot be rescued by exon/intron-number compatibility.
-    """
+    """Consolidated ortholog resolver."""
     input:
         resolver_script = PROJECT_ROOT / "scripts" / "genotyping" / "resolve_ortholog_groups.py",
         classifier_script = PROJECT_ROOT / "scripts" / "genotyping" / "classify_sharing_status.py",
@@ -507,9 +405,7 @@ rule resolve_ortholog_groups:
 
 
 rule annotate_missing_data:
-    """
-    Annotate missing gene and family data in the genotype matrix.
-    """
+    """Annotate missing gene and family data in the genotype matrix."""
     input:
         genotype_matrix = GENOTYPING_DIR / "genotype_matrix.resolved.tsv",
         gene_beds = [PROCESSED_ANN_DIR / f"{sample}.gene.bed" for sample in ALL_SAMPLES],
@@ -542,22 +438,14 @@ rule annotate_missing_data:
         """
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule all_ortholog_detection:
-    """
-    Target: Complete ortholog detection pipeline
-    """
+    """Target: Complete ortholog detection pipeline"""
     input:
         GENOTYPING_DIR / "genotype_matrix.tsv"
 
 
 rule ortholog_alignments_only:
-    """
-    Target: Generate all flank alignments without building matrix
-    """
+    """Target: Generate all flank alignments without building matrix"""
     input:
         [ORTHOLOG_DIR / f"{query}_{target}.left_flank.sorted.bam"
          for query in ALL_SAMPLES

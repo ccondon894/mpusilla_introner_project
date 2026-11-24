@@ -56,7 +56,7 @@ def load_r2c2_panel_b(
     replicates: int,
     rng: np.random.Generator,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    result_dir = root / "results/expression/functional/r2c2_between_gene"
+    result_dir = root / "results/expression/functional/between_gene"
 
     tests = pd.read_csv(result_dir / "model_coefficients.tsv", sep="\t")
     between = select_one(

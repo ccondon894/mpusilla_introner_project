@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare an expression model table directly from per-replicate featureCounts files."""
+
 
 from __future__ import annotations
 
@@ -97,9 +97,10 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     count_dir = root / "results" / "expression" / "counts"
-    frames = []
-    for replicate, strain in REPLICATE_TO_STRAIN.items():
-        frames.append(read_featurecounts(count_dir / f"{replicate}.counts.txt", replicate, strain))
+    frames = [
+        read_featurecounts(count_dir / f"{replicate}.counts.txt", replicate, strain)
+        for replicate, strain in REPLICATE_TO_STRAIN.items()
+    ]
     counts = pd.concat(frames, ignore_index=True)
 
     reference_genes = reference_gene_table(root / "results" / "annotations" / "CCMP1545.gtf")
@@ -197,8 +198,8 @@ def main() -> None:
     counts.to_csv(output_dir / "expression_model_data.tsv", sep="\t", index=False)
     gene_strain = counts.drop_duplicates(["gene_id", "strain"])
     summary = [
-        "Negative-binomial expression pilot data preparation",
-        "===================================================",
+        "Short-read expression model data preparation",
+        "============================================",
         f"Gene-replicate rows: {len(counts)}",
         f"Genes: {counts['gene_id'].nunique()}",
         f"Gene-strain rows: {len(gene_strain)}",

@@ -1,30 +1,8 @@
-# ============================================================
 # 21_snp_popgen.smk - SNP Filtering and 4-Fold Degenerate Sites
-# ============================================================
-#
-# Filters the joint VCF and extracts 4-fold degenerate sites
-# for population genetics analysis.
-#
-# Pipeline:
-# 1. Run degenotate to identify 4-fold degenerate sites
-# 2. Extract SNPs from joint VCF
-# 3. Add reference sample (CCMP1545)
-# 4. Filter for 4-fold degenerate sites
-# 5. Create sample subsets (intronerful, no missing data)
-# 6. Run SnpEff annotation
-#
-# Adapted from:
-# - /scratch1/chris/introner_vis/data_prep/commands.sh
-# - /scratch1/chris/introner_vis/degenotate/degenotate.sh
-#
-# ============================================================
 
 import os
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 # Input/output directories
 SNP_DIR = RESULTS / "snp_popgen"
@@ -45,17 +23,10 @@ INTRONERFUL_SAMPLES = GROUP1_SAMPLES  # Group1 samples have introners
 GROUP2_SAMPLES_LIST = GROUP2_SAMPLES  # RCC1749, RCC3052
 
 
-# ============================================================
-# DEGENOTATE - 4-FOLD DEGENERATE SITE IDENTIFICATION
-# ============================================================
+# Degenotate - 4-fold degenerate site identification
 
 rule run_degenotate:
-    """
-    Run degenotate to identify 4-fold degenerate sites.
-
-    Uses the reference genome and GTF annotation to find
-    synonymous codon positions.
-    """
+    """Run degenotate to identify 4-fold degenerate sites."""
     input:
         genome = SNP_REFERENCE,
         gtf = ANNOTATIONS_DIR / "CCMP1545.gtf"
@@ -86,17 +57,10 @@ rule run_degenotate:
         """
 
 
-# ============================================================
-# VCF FILTERING AND PROCESSING
-# ============================================================
+# Vcf filtering and processing
 
 rule extract_snps:
-    """
-    Extract SNPs from joint VCF (exclude indels and multi-allelic sites).
-
-    Filters for:
-    - Single nucleotide changes only (REF and ALT both length 1)
-    """
+    """Extract SNPs from joint VCF (exclude indels and multi-allelic sites)."""
     input:
         vcf = VCF_DIR / "mpusilla.joint.vcf.gz"
     output:
@@ -112,12 +76,7 @@ rule extract_snps:
 
 
 rule add_reference_sample:
-    """
-    Add CCMP1545 as a sample column with homozygous reference genotypes.
-
-    The reference genome (CCMP1545) isn't in the VCF as a sample since
-    reads were aligned to it. This adds it for complete analysis.
-    """
+    """Add CCMP1545 as a sample column with homozygous reference genotypes."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.vcf.gz",
         awk_script = PROJECT_ROOT / "scripts" / "popgen" / "insert_reference.awk"
@@ -131,11 +90,7 @@ rule add_reference_sample:
 
 
 rule extract_4fold_sites:
-    """
-    Filter VCF for 4-fold degenerate sites only.
-
-    Also excludes scaffold_2 (mating type region / MT).
-    """
+    """Filter VCF for 4-fold degenerate sites only."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.with_ref.vcf.gz",
         bed_4d = DEGENOTATE_DIR / "degeneracy-all-sites.4d.bed.gz",
@@ -156,11 +111,7 @@ rule extract_4fold_sites:
 
 
 rule create_intronerful_subset:
-    """
-    Create subset VCF with only intronerful (Group1) samples.
-
-    Extracts columns for Group1 samples plus CCMP1545 reference.
-    """
+    """Create subset VCF with only intronerful (Group1) samples."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"
     output:
@@ -185,12 +136,7 @@ rule create_intronerful_subset:
 
 
 rule filter_no_missing_data:
-    """
-    Create subset VCF with no missing genotypes.
-
-    Filters for sites where all samples have calls (AN = 2*n_samples for diploid,
-    or AN = n_samples for haploid).
-    """
+    """Create subset VCF with no missing genotypes."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"
     output:
@@ -206,9 +152,7 @@ rule filter_no_missing_data:
 
 
 rule create_group1_subset:
-    """
-    Create subset VCF with only Group1 samples for within-group analysis.
-    """
+    """Create subset VCF with only Group1 samples for within-group analysis."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"
     output:
@@ -222,16 +166,10 @@ rule create_group1_subset:
         """
 
 
-# ============================================================
-# SNPEFF ANNOTATION
-# ============================================================
+# Snpeff annotation
 
 rule build_snpeff_database:
-    """
-    Build SnpEff database for CCMP1545.
-
-    Creates a custom database from the reference genome and GTF.
-    """
+    """Build SnpEff database for CCMP1545."""
     input:
         genome = SNP_REFERENCE,
         gtf = ANNOTATIONS_DIR / "CCMP1545.gtf"
@@ -251,7 +189,7 @@ rule build_snpeff_database:
         # Copy files with required names
         cp {input.genome} {params.data_dir}/{params.db_name}/sequences.fa
         cp {input.gtf} {params.data_dir}/{params.db_name}/genes.gtf
-            
+
         # Write a minimal snpEff config
 cat > {params.config} <<EOF
 data.dir = {params.data_dir}/
@@ -265,9 +203,7 @@ EOF
 
 
 rule run_snpeff:
-    """
-    Annotate SNPs with functional effects using SnpEff.
-    """
+    """Annotate SNPs with functional effects using SnpEff."""
     input:
         vcf = VCF_DIR / "mpusilla.snps.with_ref.vcf.gz",
         db_done = SNPEFF_DIR / "snpeff_db.done"
@@ -295,11 +231,7 @@ rule run_snpeff:
 
 
 rule summarize_site_classes:
-    """
-    Summarize SNP counts by site class (non-synonymous, synonymous, 4-fold, non-CDS).
-
-    Excludes scaffold_2 (mating type region).
-    """
+    """Summarize SNP counts by site class (non-synonymous, synonymous, 4-fold, non-CDS)."""
     input:
         bed = DEGENOTATE_DIR / "degeneracy-all-sites.bed",
         vcf = VCF_DIR / "mpusilla.snps.with_ref.vcf.gz",
@@ -323,9 +255,7 @@ rule summarize_site_classes:
 
 
 rule filter_snpeff_no_mt:
-    """
-    Remove mating type region from SnpEff annotated VCF.
-    """
+    """Remove mating type region from SnpEff annotated VCF."""
     input:
         vcf = SNPEFF_DIR / "mpusilla.snps.snpEff.vcf"
     output:
@@ -339,14 +269,8 @@ rule filter_snpeff_no_mt:
         """
 
 
-# ============================================================
-# TARGET RULES
-# ============================================================
-
 rule snp_popgen_complete:
-    """
-    Target: Complete SNP filtering and annotation.
-    """
+    """Target: Complete SNP filtering and annotation."""
     input:
         VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz",
         VCF_DIR / "mpusilla.snps.4d.notMT.intronerful.vcf.gz",
@@ -357,16 +281,12 @@ rule snp_popgen_complete:
 
 
 rule degenotate_only:
-    """
-    Target: Run degenotate only.
-    """
+    """Target: Run degenotate only."""
     input:
         DEGENOTATE_DIR / "degeneracy-all-sites.4d.bed.gz"
 
 
 rule fourD_vcf_only:
-    """
-    Target: Generate 4-fold degenerate VCF only.
-    """
+    """Target: Generate 4-fold degenerate VCF only."""
     input:
         VCF_DIR / "mpusilla.snps.4d.notMT.vcf.gz"

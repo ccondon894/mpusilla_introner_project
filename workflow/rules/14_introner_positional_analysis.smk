@@ -1,10 +1,4 @@
-# ============================================================================
 # 14_introner_positional_analysis.smk
-# Spearman correlation of introner density across genomic windows
-# Inter-genome (CCMP1545 vs RCC1749) and intra-genome (family vs family)
-#
-# Source: /scratch1/chris/introner-group-comparison-analysis/
-# ============================================================================
 
 import os
 
@@ -34,24 +28,15 @@ def ip_family_label(family):
     return family if family == 'all' else f'family_{family}'
 
 
-# ============================================================================
-# TARGET RULE
-# ============================================================================
+# Target rule
 
 rule introner_positional_all:
-    """
-    Target: Introner positional correlation analysis
-
-    Produces inter-genome and intra-genome Spearman correlation
-    analyses of introner density across window scales.
-    """
+    """Target: Introner positional correlation analysis"""
     input:
         INTRONER_POS_FIGURES / "inter_genome_window_scale_correlation.png"
 
 
-# ============================================================================
-# INTER-GENOME CORRELATION RULES
-# ============================================================================
+# Inter-genome correlation rules
 
 rule inter_genome_spearman_correlation:
     """Compute inter-genome Spearman correlation of introner density."""
@@ -117,9 +102,7 @@ rule plot_inter_genome_window_scale:
         """
 
 
-# ============================================================================
-# INTRA-GENOME CORRELATION RULES
-# ============================================================================
+# Intra-genome correlation rules
 
 rule intra_genome_spearman_correlation:
     """Compute intra-genome Spearman correlation between introner families."""

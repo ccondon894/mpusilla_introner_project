@@ -191,7 +191,7 @@ def main():
     if G.size == 0:
         raise SystemExit("No usable sites")
 
-    # ---- PCA -------------------------------------------------------------
+    # PCA
     scores, var_exp, n_used = pca_svd(G)
     pc_df = pd.DataFrame({
         "sample": sample_list,
@@ -227,7 +227,7 @@ def main():
     print(f"  cluster_1 (PC1>=0): {[s for s, c in zip(sample_list, pc1_split) if c == 1]}",
           file=sys.stderr)
 
-    # ---- FST + permutation ----------------------------------------------
+    # FST + permutation
     label1 = ~pc1_split_labels
     label2 = pc1_split_labels
     if label1.sum() < 2 or label2.sum() < 2:
@@ -276,7 +276,7 @@ def main():
         fh.write("kmeans_cluster_1_samples\t" +
                  ",".join(s for s, c in zip(sample_list, km_labels) if c == 1) + "\n")
 
-    # ---- SFS decomposition by cluster ------------------------------------
+    # SFS decomposition by cluster
     # For each segregating site, count alt alleles in cluster 0 and cluster 1.
     # Tabulate the unfolded SFS and split by which cluster contributes the
     # minor allele (or both equally).
@@ -311,7 +311,6 @@ def main():
     decomp_df = pd.DataFrame(rows)
     decomp_df.to_csv(args.sfs_decomp_table, sep="\t", index=False)
 
-    # ---- Plots -----------------------------------------------------------
     pc1 = scores[:, 0]
     pc2 = scores[:, 1] if scores.shape[1] > 1 else np.zeros(n)
     colors = ["tab:blue" if c == 0 else "tab:red" for c in pc1_split]
